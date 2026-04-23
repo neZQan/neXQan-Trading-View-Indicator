@@ -1,0 +1,295 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0
+// © neXQan
+//@version=5
+indicator(title="neXQan XAUUSD Gold Indicator", shorttitle="neXQan Gold", overlay=true, max_bars_back=500, max_lines_count=50, max_labels_count=50)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 1 ▸ USER INPUTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── EMA Settings ──────────────────────────────────────────────────────────────
+grp_ema = "EMA Trend Filter"
+ema_fast_len  = input.int(21,  "Fast EMA",   minval=1, group=grp_ema)
+ema_mid_len   = input.int(50,  "Mid EMA",    minval=1, group=grp_ema)
+ema_slow_len  = input.int(200, "Slow EMA",   minval=1, group=grp_ema)
+show_emas     = input.bool(true, "Show EMAs", group=grp_ema)
+
+// ── RSI Settings ──────────────────────────────────────────────────────────────
+grp_rsi = "RSI Filter"
+rsi_len        = input.int(14, "RSI Length",       minval=2,  group=grp_rsi)
+rsi_ob         = input.int(70, "Overbought Level", minval=50, group=grp_rsi)
+rsi_os         = input.int(30, "Oversold Level",   maxval=50, group=grp_rsi)
+rsi_mid        = input.int(50, "Mid Level",        group=grp_rsi)
+
+// ── MACD Settings ─────────────────────────────────────────────────────────────
+grp_macd = "MACD Confirmation"
+macd_fast   = input.int(12, "MACD Fast",   minval=1, group=grp_macd)
+macd_slow   = input.int(26, "MACD Slow",   minval=1, group=grp_macd)
+macd_signal = input.int(9,  "MACD Signal", minval=1, group=grp_macd)
+
+// ── ATR / Risk Management ─────────────────────────────────────────────────────
+grp_atr = "ATR Risk Management"
+atr_len        = input.int(14,  "ATR Length",       minval=1,   group=grp_atr)
+sl_atr_mult    = input.float(1.5, "Stop-Loss ATR ×",  minval=0.1, step=0.1, group=grp_atr)
+tp1_atr_mult   = input.float(1.5, "TP 1 ATR ×",       minval=0.1, step=0.1, group=grp_atr)
+tp2_atr_mult   = input.float(3.0, "TP 2 ATR ×",       minval=0.1, step=0.1, group=grp_atr)
+show_sl_tp     = input.bool(true, "Show SL / TP Lines", group=grp_atr)
+
+// ── Stochastic RSI ────────────────────────────────────────────────────────────
+grp_stoch = "Stochastic RSI"
+stoch_rsi_len  = input.int(14, "Stoch RSI Length",  minval=2, group=grp_stoch)
+stoch_k_smooth = input.int(3,  "K Smooth",          minval=1, group=grp_stoch)
+stoch_d_smooth = input.int(3,  "D Smooth",          minval=1, group=grp_stoch)
+stoch_ob       = input.int(80, "Stoch Overbought",  minval=50, group=grp_stoch)
+stoch_os       = input.int(20, "Stoch Oversold",    maxval=50, group=grp_stoch)
+
+// ── Pivot Points ──────────────────────────────────────────────────────────────
+grp_pp = "Pivot Points"
+show_pivots    = input.bool(true, "Show Daily Pivots", group=grp_pp)
+
+// ── Volume Filter ─────────────────────────────────────────────────────────────
+grp_vol = "Volume Filter"
+use_vol_filter = input.bool(false, "Require Above-Average Volume", group=grp_vol,
+     tooltip="When enabled, signals only fire on bars where volume exceeds the 20-bar average.")
+vol_ma_len     = input.int(20, "Volume MA Length", minval=1, group=grp_vol)
+
+// ── Signal Display ────────────────────────────────────────────────────────────
+grp_sig = "Signal Display"
+show_signals   = input.bool(true,  "Show Buy / Sell Arrows", group=grp_sig)
+show_win_table = input.bool(true,  "Show Win-Rate Table",    group=grp_sig)
+eval_bars      = input.int(10,     "Win-Rate Eval Bars",  minval=5, maxval=50, group=grp_sig,
+     tooltip="How many bars after a signal to evaluate TP/SL outcome for win-rate statistics.")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 2 ▸ CORE CALCULATIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── EMAs ──────────────────────────────────────────────────────────────────────
+ema_fast  = ta.ema(close, ema_fast_len)
+ema_mid   = ta.ema(close, ema_mid_len)
+ema_slow  = ta.ema(close, ema_slow_len)
+
+// ── RSI ───────────────────────────────────────────────────────────────────────
+rsi = ta.rsi(close, rsi_len)
+
+// ── MACD ──────────────────────────────────────────────────────────────────────
+[macd_line, signal_line, hist_line] = ta.macd(close, macd_fast, macd_slow, macd_signal)
+
+// ── ATR ───────────────────────────────────────────────────────────────────────
+atr = ta.atr(atr_len)
+
+// ── Stochastic RSI ────────────────────────────────────────────────────────────
+rsi_for_stoch = ta.rsi(close, stoch_rsi_len)
+stoch_k_raw   = ta.stoch(rsi_for_stoch, rsi_for_stoch, rsi_for_stoch, stoch_rsi_len)
+stoch_k       = ta.sma(stoch_k_raw, stoch_k_smooth)
+stoch_d       = ta.sma(stoch_k, stoch_d_smooth)
+
+// ── Trend state ───────────────────────────────────────────────────────────────
+bull_trend = ema_fast > ema_mid and ema_mid > ema_slow
+bear_trend = ema_fast < ema_mid and ema_mid < ema_slow
+
+// ── Volume filter ─────────────────────────────────────────────────────────────
+vol_ma      = ta.sma(volume, vol_ma_len)
+vol_ok      = not use_vol_filter or volume > vol_ma
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 3 ▸ SIGNAL LOGIC
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── BUY conditions ────────────────────────────────────────────────────────────
+// 1. Price is above all EMAs (bullish structure)
+// 2. RSI above mid and not overbought
+// 3. MACD line crosses above signal (momentum)
+// 4. Stoch RSI K crosses above D from oversold zone
+buy_cond1 = close > ema_fast and close > ema_mid and close > ema_slow
+buy_cond2 = rsi > rsi_mid and rsi < rsi_ob
+buy_cond3 = ta.crossover(macd_line, signal_line)
+buy_cond4 = ta.crossover(stoch_k, stoch_d) and stoch_k < stoch_ob
+
+buy_signal = buy_cond1 and buy_cond2 and buy_cond3 and buy_cond4 and vol_ok
+
+// ── SELL conditions ───────────────────────────────────────────────────────────
+// 1. Price is below all EMAs (bearish structure)
+// 2. RSI below mid and not oversold
+// 3. MACD line crosses below signal (momentum)
+// 4. Stoch RSI K crosses below D from overbought zone
+sell_cond1 = close < ema_fast and close < ema_mid and close < ema_slow
+sell_cond2 = rsi < rsi_mid and rsi > rsi_os
+sell_cond3 = ta.crossunder(macd_line, signal_line)
+sell_cond4 = ta.crossunder(stoch_k, stoch_d) and stoch_k > stoch_os
+
+sell_signal = sell_cond1 and sell_cond2 and sell_cond3 and sell_cond4 and vol_ok
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 4 ▸ WIN-RATE STATISTICS
+// ─────────────────────────────────────────────────────────────────────────────
+// Evaluate whether a past signal ended profitably.
+// A BUY is a winner if price rose by ≥ TP1 before hitting SL.
+// A SELL is a winner if price fell by ≥ TP1 before hitting SL.
+
+var int   buy_total  = 0
+var int   buy_wins   = 0
+var int   sell_total = 0
+var int   sell_wins  = 0
+
+// Evaluate previous signal outcome (walk forward bar-by-bar, stop at first hit)
+if buy_signal[eval_bars] or sell_signal[eval_bars]
+    past_dir   = buy_signal[eval_bars] ? 1 : -1
+    past_price = close[eval_bars]
+    past_atr   = atr[eval_bars]
+    past_sl    = past_dir == 1 ? past_price - sl_atr_mult * past_atr : past_price + sl_atr_mult * past_atr
+    past_tp    = past_dir == 1 ? past_price + tp1_atr_mult * past_atr : past_price - tp1_atr_mult * past_atr
+
+    // Walk oldest-to-newest; break on the first bar where TP or SL is touched.
+    // On the same bar, TP is checked first (optimistic convention since intra-bar
+    // order is unknown at this resolution).
+    hit_tp = false
+    hit_sl = false
+    for i = eval_bars - 1 to 0
+        if past_dir == 1
+            if high[i] >= past_tp
+                hit_tp := true
+                break
+            if low[i] <= past_sl
+                hit_sl := true
+                break
+        else
+            if low[i] <= past_tp
+                hit_tp := true
+                break
+            if high[i] >= past_sl
+                hit_sl := true
+                break
+
+    if hit_tp
+        if buy_signal[eval_bars]
+            buy_wins  := buy_wins  + 1
+            buy_total := buy_total + 1
+        else
+            sell_wins  := sell_wins  + 1
+            sell_total := sell_total + 1
+    else
+        // hit_sl or neither hit within eval window → count as loss
+        if buy_signal[eval_bars]
+            buy_total := buy_total + 1
+        else
+            sell_total := sell_total + 1
+
+total_signals = buy_total + sell_total
+total_wins    = buy_wins  + sell_wins
+overall_wr    = total_signals > 0 ? (total_wins / total_signals) * 100 : 0.0
+buy_wr        = buy_total  > 0 ? (buy_wins  / buy_total)  * 100 : 0.0
+sell_wr       = sell_total > 0 ? (sell_wins / sell_total) * 100 : 0.0
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 5 ▸ PIVOT POINTS  (daily, classic formula)
+// ─────────────────────────────────────────────────────────────────────────────
+prev_high  = request.security(syminfo.tickerid, "D", high[1],  lookahead=barmerge.lookahead_on)
+prev_low   = request.security(syminfo.tickerid, "D", low[1],   lookahead=barmerge.lookahead_on)
+prev_close = request.security(syminfo.tickerid, "D", close[1], lookahead=barmerge.lookahead_on)
+
+pivot  = (prev_high + prev_low + prev_close) / 3
+pp_r1  = 2 * pivot - prev_low
+pp_s1  = 2 * pivot - prev_high
+pp_r2  = pivot + (prev_high - prev_low)
+pp_s2  = pivot - (prev_high - prev_low)
+pp_r3  = prev_high + 2 * (pivot - prev_low)
+pp_s3  = prev_low  - 2 * (prev_high - pivot)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 6 ▸ PLOTS — EMAs
+// ─────────────────────────────────────────────────────────────────────────────
+plot(show_emas ? ema_fast : na,  "EMA 21",  color=color.new(color.yellow, 0), linewidth=1)
+plot(show_emas ? ema_mid  : na,  "EMA 50",  color=color.new(color.orange, 0), linewidth=2)
+plot(show_emas ? ema_slow : na,  "EMA 200", color=color.new(color.red,    0), linewidth=2)
+
+// ── EMA ribbon shading ────────────────────────────────────────────────────────
+p_fast = plot(show_emas ? ema_fast : na, display=display.none)
+p_mid  = plot(show_emas ? ema_mid  : na, display=display.none)
+fill(p_fast, p_mid,
+     color = bull_trend ? color.new(color.teal, 85) : bear_trend ? color.new(color.red, 85) : color.new(color.gray, 90),
+     title = "EMA Ribbon")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 7 ▸ PLOTS — Pivot Points
+// ─────────────────────────────────────────────────────────────────────────────
+plot(show_pivots ? pivot : na, "Pivot",  color=color.new(color.white,  20), linewidth=1, style=plot.style_circles)
+plot(show_pivots ? pp_r1 : na, "R1",     color=color.new(color.green,  20), linewidth=1, style=plot.style_circles)
+plot(show_pivots ? pp_s1 : na, "S1",     color=color.new(color.red,    20), linewidth=1, style=plot.style_circles)
+plot(show_pivots ? pp_r2 : na, "R2",     color=color.new(color.green,  40), linewidth=1, style=plot.style_cross)
+plot(show_pivots ? pp_s2 : na, "S2",     color=color.new(color.red,    40), linewidth=1, style=plot.style_cross)
+plot(show_pivots ? pp_r3 : na, "R3",     color=color.new(color.green,  60), linewidth=1, style=plot.style_cross)
+plot(show_pivots ? pp_s3 : na, "S3",     color=color.new(color.red,    60), linewidth=1, style=plot.style_cross)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 8 ▸ PLOTS — Buy / Sell Signals + SL/TP Lines
+// ─────────────────────────────────────────────────────────────────────────────
+plotshape(show_signals and buy_signal,  "BUY",  shape.labelup,   location.belowbar, color.new(color.lime,  0),  text="BUY",  textcolor=color.black, size=size.small)
+plotshape(show_signals and sell_signal, "SELL", shape.labeldown, location.abovebar, color.new(color.red,   0),  text="SELL", textcolor=color.white, size=size.small)
+
+// Candle colouring when a signal fires
+barcolor(buy_signal  ? color.new(color.lime, 30)  : sell_signal ? color.new(color.red, 30) : na)
+
+// ── SL / TP labels on signal bars ─────────────────────────────────────────────
+if show_sl_tp and buy_signal
+    sl_price  = close - sl_atr_mult  * atr
+    tp1_price = close + tp1_atr_mult * atr
+    tp2_price = close + tp2_atr_mult * atr
+    label.new(bar_index, sl_price,  "SL",  color=color.red,   textcolor=color.white, style=label.style_label_right, size=size.tiny)
+    label.new(bar_index, tp1_price, "TP1", color=color.green, textcolor=color.white, style=label.style_label_right, size=size.tiny)
+    label.new(bar_index, tp2_price, "TP2", color=color.teal,  textcolor=color.white, style=label.style_label_right, size=size.tiny)
+
+if show_sl_tp and sell_signal
+    sl_price  = close + sl_atr_mult  * atr
+    tp1_price = close - tp1_atr_mult * atr
+    tp2_price = close - tp2_atr_mult * atr
+    label.new(bar_index, sl_price,  "SL",  color=color.red,   textcolor=color.white, style=label.style_label_right, size=size.tiny)
+    label.new(bar_index, tp1_price, "TP1", color=color.green, textcolor=color.white, style=label.style_label_right, size=size.tiny)
+    label.new(bar_index, tp2_price, "TP2", color=color.teal,  textcolor=color.white, style=label.style_label_right, size=size.tiny)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 9 ▸ WIN-RATE TABLE
+// ─────────────────────────────────────────────────────────────────────────────
+var table wr_table = table.new(position.top_right, 2, 6,
+     bgcolor      = color.new(color.black,  30),
+     border_width = 1,
+     border_color = color.new(color.gray, 40))
+
+if show_win_table and barstate.islast
+    // Header
+    table.cell(wr_table, 0, 0, "neXQan Gold Stats",
+         text_color = color.yellow, text_size = size.small,
+         bgcolor = color.new(color.navy, 20), text_halign = text.align_center)
+    table.merge_cells(wr_table, 0, 0, 1, 0)
+
+    // Labels column
+    table.cell(wr_table, 0, 1, "Overall WR",  text_color=color.white, text_size=size.small)
+    table.cell(wr_table, 0, 2, "Buy WR",      text_color=color.lime,  text_size=size.small)
+    table.cell(wr_table, 0, 3, "Sell WR",     text_color=color.red,   text_size=size.small)
+    table.cell(wr_table, 0, 4, "Total Sigs",  text_color=color.white, text_size=size.small)
+    table.cell(wr_table, 0, 5, "Trend",       text_color=color.white, text_size=size.small)
+
+    // Values column
+    wr_color = overall_wr >= 60 ? color.lime : overall_wr >= 45 ? color.yellow : color.red
+    table.cell(wr_table, 1, 1, str.tostring(overall_wr, "#.##") + "%", text_color=wr_color, text_size=size.small)
+
+    buy_wr_color = buy_wr >= 60 ? color.lime : buy_wr >= 45 ? color.yellow : color.red
+    table.cell(wr_table, 1, 2, str.tostring(buy_wr, "#.##")  + "% (" + str.tostring(buy_total)  + ")",
+         text_color=buy_wr_color, text_size=size.small)
+
+    sell_wr_color = sell_wr >= 60 ? color.lime : sell_wr >= 45 ? color.yellow : color.red
+    table.cell(wr_table, 1, 3, str.tostring(sell_wr, "#.##") + "% (" + str.tostring(sell_total) + ")",
+         text_color=sell_wr_color, text_size=size.small)
+
+    table.cell(wr_table, 1, 4, str.tostring(total_signals), text_color=color.white, text_size=size.small)
+
+    trend_txt   = bull_trend ? "BULLISH ▲" : bear_trend ? "BEARISH ▼" : "RANGING ◆"
+    trend_color = bull_trend ? color.lime   : bear_trend ? color.red   : color.gray
+    table.cell(wr_table, 1, 5, trend_txt, text_color=trend_color, text_size=size.small)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 10 ▸ ALERTS
+// ─────────────────────────────────────────────────────────────────────────────
+alertcondition(buy_signal,  "neXQan BUY Signal",  "neXQan Gold: BUY Signal on {{ticker}} @ {{close}}")
+alertcondition(sell_signal, "neXQan SELL Signal", "neXQan Gold: SELL Signal on {{ticker}} @ {{close}}")
+alertcondition(buy_signal or sell_signal, "neXQan Any Signal", "neXQan Gold: Signal on {{ticker}} @ {{close}}")
