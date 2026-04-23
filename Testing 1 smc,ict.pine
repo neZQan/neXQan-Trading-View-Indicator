@@ -7,9 +7,7 @@ indicator("XAUUSD Volatility Multi-Filter Signal v1",
 // Inputs
 // =========================
 tfNote = input.string("Use on M15-H1 for XAUUSD", "Note", options=["Use on M15-H1 for XAUUSD"])
-
-emaFastLen   = input.int(50,  "EMA Fast", minval=1)
-emaSlowLen   = input.int(200, "EMA Slow", minval=1)
+vwapLineWidth = input.int(4, "VWAP Line Width", minval=1, maxval=6)
 
 rsiLen       = input.int(14, "RSI Length", minval=1)
 rsiLongMin   = input.int(55, "RSI Long Min", minval=1, maxval=100)
@@ -35,7 +33,6 @@ useSession   = input.bool(false, "Use Session Filter")
 sessionInput = input.session("1300-2300", "Session (Exchange Time)")
 
 htfTf         = input.timeframe("240", "HTF Bias Timeframe")
-htfEmaLen     = input.int(200, "HTF EMA Length", minval=20)
 useHTFBias    = input.bool(false, "Use HTF Bias Filter")
 dealingLen    = input.int(60, "Premium/Discount Range", minval=10)
 usePDFilter   = input.bool(false, "Use Premium/Discount Filter")
@@ -92,7 +89,7 @@ strategyProfile = input.string("Balanced", "Strategy Profile", options=["Custom"
 
 useQualityGate = input.bool(true, "Use Quality Gate")
 hardAdxMin = input.float(20.0, "Hard ADX Min", step=0.1)
-minEmaGapAtr = input.float(0.15, "Min EMA Gap (ATR Mult)", step=0.01)
+minVwapSlopeAtr = input.float(0.15, "Min VWAP Slope (ATR Mult)", step=0.01)
 atrUpperBandMult = input.float(2.2, "ATR Upper Band Mult", step=0.1)
 minBarsBetweenEntries = input.int(6, "Min Bars Between Entries", minval=0)
 useAdxInScore = input.bool(false, "Use ADX In Score")
@@ -102,12 +99,12 @@ usePdInScore = input.bool(false, "Use Premium/Discount In Score")
 useDryMode = input.bool(true, "Use Anti-Dry Mode")
 dryBarsTrigger = input.int(120, "Dry Mode Trigger Bars", minval=20)
 dryRelaxSMC = input.bool(true, "Dry Mode Relax SMC")
-requireTrendSlope = input.bool(true, "Require EMA Slope Alignment")
-slopeLookback = input.int(3, "EMA Slope Lookback", minval=1)
+requireTrendSlope = input.bool(true, "Require VWAP Slope Alignment")
+slopeLookback = input.int(3, "VWAP Slope Lookback", minval=1)
 useEntryCandleFilter = input.bool(true, "Require Entry Candle Momentum")
 entryBodyAtrMin = input.float(0.2, "Min Candle Body (ATR)", step=0.05, minval=0.0)
 useNoChaseFilter = input.bool(true, "Avoid Chasing Extended Entries")
-maxEntryStretchATR = input.float(0.75, "Max Distance From EMA Fast (ATR)", step=0.05, minval=0.1)
+maxEntryStretchATR = input.float(0.75, "Max Distance From VWAP (ATR)", step=0.05, minval=0.1)
 
 isSafe = strategyProfile == "Safe"
 isBalanced = strategyProfile == "Balanced"
@@ -155,7 +152,7 @@ effBEOffsetATR = strategyProfile == "Custom" ? beOffsetATR : isSafe ? 0.15 : isB
 effMaxBarsInTrade = strategyProfile == "Custom" ? maxBarsInTrade : isSafe ? 60 : isBalanced ? 80 : 120
 effCooldownBars = strategyProfile == "Custom" ? cooldownBars : isSafe ? 10 : isBalanced ? 6 : 3
 effHardAdxMin = strategyProfile == "Custom" ? hardAdxMin : isSafe ? 22.0 : isBalanced ? 20.0 : 18.0
-effMinEmaGapAtr = strategyProfile == "Custom" ? minEmaGapAtr : isSafe ? 0.22 : isBalanced ? 0.15 : 0.1
+effMinVwapSlopeAtr = strategyProfile == "Custom" ? minVwapSlopeAtr : isSafe ? 0.22 : isBalanced ? 0.15 : 0.1
 effAtrUpperBandMult = strategyProfile == "Custom" ? atrUpperBandMult : isSafe ? 2.0 : isBalanced ? 2.2 : 2.6
 effMinBarsBetweenEntries = strategyProfile == "Custom" ? minBarsBetweenEntries : isSafe ? 10 : isBalanced ? 8 : 4
 effUseQualityGate = strategyProfile == "Custom" ? useQualityGate : not isAggressive
@@ -182,8 +179,10 @@ f_adx(_len) =>
 // =========================
 // Indicators
 // =========================
-emaFast = ta.ema(close, emaFastLen)
-emaSlow = ta.ema(close, emaSlowLen)
+vwapVal = ta.vwap(hlc3)
+vwapTouched = low <= vwapVal and high >= vwapVal
+vwapLongTouch = vwapTouched and close > vwapVal
+vwapShortTouch = vwapTouched and close < vwapVal
 
 rsiVal = ta.rsi(close, rsiLen)
 
@@ -208,10 +207,8 @@ stBear = close < stLine
 
 inSession = effUseSession ? not na(time(timeframe.period, sessionInput)) : true
 
-htfClose = request.security(syminfo.tickerid, htfTf, close)
-htfEma = request.security(syminfo.tickerid, htfTf, ta.ema(close, htfEmaLen))
-htfBull = htfClose > htfEma
-htfBear = htfClose < htfEma
+htfBull = request.security(syminfo.tickerid, htfTf, close > ta.vwap(hlc3))
+htfBear = request.security(syminfo.tickerid, htfTf, close < ta.vwap(hlc3))
 
 dealingHigh = ta.highest(high, dealingLen)
 dealingLow = ta.lowest(low, dealingLen)
@@ -304,8 +301,8 @@ shortSMCPass = (not effUseSMCICT or effSMCMode == "Off") ? true : effSMCMode == 
 // Scoring system (multi-filter)
 // =========================
 longScore = 0
-longScore += close > emaFast ? 1 : 0
-longScore += emaFast > emaSlow ? 1 : 0
+longScore += close > vwapVal ? 1 : 0
+longScore += vwapVal > vwapVal[slopeLookback] ? 1 : 0
 longScore += rsiVal >= rsiLongMin ? 1 : 0
 longScore += macdLine > macdSig and macdHist > 0 ? 1 : 0
 longScore += useAdxInScore and adxVal >= adxMin ? 1 : 0
@@ -315,8 +312,8 @@ longScore += useHtfInScore and htfBull ? 1 : 0
 longScore += usePdInScore and inDiscount ? 1 : 0
 
 shortScore = 0
-shortScore += close < emaFast ? 1 : 0
-shortScore += emaFast < emaSlow ? 1 : 0
+shortScore += close < vwapVal ? 1 : 0
+shortScore += vwapVal < vwapVal[slopeLookback] ? 1 : 0
 shortScore += rsiVal <= rsiShortMax ? 1 : 0
 shortScore += macdLine < macdSig and macdHist < 0 ? 1 : 0
 shortScore += useAdxInScore and adxVal >= adxMin ? 1 : 0
@@ -347,7 +344,7 @@ dryModeOn = useDryMode and barsSinceEntry >= dryBarsTrigger
 relaxedMinScore = dryModeOn ? math.max(3, effMinScore - 1) : effMinScore
 relaxedFastMinScore = dryModeOn ? math.max(3, effFastMinScore - 1) : effFastMinScore
 relaxedHardAdx = dryModeOn ? math.max(14.0, effHardAdxMin - 2.0) : effHardAdxMin
-relaxedMinEmaGap = dryModeOn ? math.max(0.05, effMinEmaGapAtr - 0.04) : effMinEmaGapAtr
+relaxedMinVwapSlope = dryModeOn ? math.max(0.05, effMinVwapSlopeAtr - 0.04) : effMinVwapSlopeAtr
 
 longSMCPassFinal = dryModeOn and dryRelaxSMC and effUseSMCICT and effSMCMode != "Off" ? (effSMCMode == "Strict" ? longSMCBalanced : longSMCAggressive) : longSMCPass
 shortSMCPassFinal = dryModeOn and dryRelaxSMC and effUseSMCICT and effSMCMode != "Off" ? (effSMCMode == "Strict" ? shortSMCBalanced : shortSMCAggressive) : shortSMCPass
@@ -361,20 +358,18 @@ pdShortOK = not effUsePDFilter or inPremium
 macdLongOK = not effUseMACDConfirm or macdBullConfirm
 macdShortOK = not effUseMACDConfirm or macdBearConfirm
 
-emaGap = math.abs(emaFast - emaSlow)
-emaGapOK = emaGap >= atrVal * relaxedMinEmaGap
 hardAdxOK = adxVal >= relaxedHardAdx
 volBandOK = atrVal > atrBase * atrVolMult and atrVal < atrBase * effAtrUpperBandMult
-emaFastSlope = emaFast - emaFast[slopeLookback]
-emaSlowSlope = emaSlow - emaSlow[slopeLookback]
+vwapSlope = na(vwapVal[slopeLookback]) ? 0.0 : vwapVal - vwapVal[slopeLookback]
+vwapSlopeOK = math.abs(vwapSlope) >= atrVal * relaxedMinVwapSlope
 candleBody = math.abs(close - open)
-entryStretchATR = atrVal == 0 ? 0.0 : math.abs(close - emaFast) / atrVal
-bullSlopeOK = not requireTrendSlope or (emaFastSlope > 0 and emaSlowSlope >= 0)
-bearSlopeOK = not requireTrendSlope or (emaFastSlope < 0 and emaSlowSlope <= 0)
+entryStretchATR = atrVal == 0 ? 0.0 : math.abs(close - vwapVal) / atrVal
+bullSlopeOK = not requireTrendSlope or vwapSlope > 0
+bearSlopeOK = not requireTrendSlope or vwapSlope < 0
 bullCandleOK = not useEntryCandleFilter or (close > open and candleBody >= atrVal * entryBodyAtrMin)
 bearCandleOK = not useEntryCandleFilter or (close < open and candleBody >= atrVal * entryBodyAtrMin)
-longNoChaseOK = not useNoChaseFilter or close <= emaFast + atrVal * maxEntryStretchATR
-shortNoChaseOK = not useNoChaseFilter or close >= emaFast - atrVal * maxEntryStretchATR
+longNoChaseOK = not useNoChaseFilter or entryStretchATR <= maxEntryStretchATR
+shortNoChaseOK = not useNoChaseFilter or entryStretchATR <= maxEntryStretchATR
 fixedTp1Dist = tp1Pips * pipSize
 fixedTp2Dist = tp2Pips * pipSize
 fixedTp3Dist = tp3Pips * pipSize
@@ -384,22 +379,22 @@ longProjectedRR = longProjectedRisk == 0 ? 0.0 : fixedTp2Dist / longProjectedRis
 shortProjectedRR = shortProjectedRisk == 0 ? 0.0 : fixedTp2Dist / shortProjectedRisk
 tpModeLongOK = tpMode == "ATR/RR" or longProjectedRR >= effMinRR
 tpModeShortOK = tpMode == "ATR/RR" or shortProjectedRR >= effMinRR
-qualityLongOK = not effUseQualityGate or (hardAdxOK and emaGapOK and volBandOK and stBull and bullSlopeOK and bullCandleOK and longNoChaseOK and tpModeLongOK)
-qualityShortOK = not effUseQualityGate or (hardAdxOK and emaGapOK and volBandOK and stBear and bearSlopeOK and bearCandleOK and shortNoChaseOK and tpModeShortOK)
+qualityLongOK = not effUseQualityGate or (hardAdxOK and vwapSlopeOK and volBandOK and stBull and bullSlopeOK and bullCandleOK and longNoChaseOK and tpModeLongOK)
+qualityShortOK = not effUseQualityGate or (hardAdxOK and vwapSlopeOK and volBandOK and stBear and bearSlopeOK and bearCandleOK and shortNoChaseOK and tpModeShortOK)
 
-longSignalCore = inSession and cooldownOK and entrySpacingOK and htfLongOK and pdLongOK and macdLongOK and qualityLongOK and longScore >= relaxedMinScore and longSMCPassFinal
-shortSignalCore = inSession and cooldownOK and entrySpacingOK and htfShortOK and pdShortOK and macdShortOK and qualityShortOK and shortScore >= relaxedMinScore and shortSMCPassFinal
+longSignalCore = inSession and cooldownOK and entrySpacingOK and htfLongOK and pdLongOK and macdLongOK and qualityLongOK and vwapLongTouch and longScore >= relaxedMinScore and longSMCPassFinal
+shortSignalCore = inSession and cooldownOK and entrySpacingOK and htfShortOK and pdShortOK and macdShortOK and qualityShortOK and vwapShortTouch and shortScore >= relaxedMinScore and shortSMCPassFinal
 
-longFastSignal = inSession and cooldownOK and entrySpacingOK and htfLongOK and pdLongOK and macdLongOK and qualityLongOK and effUseFastEntries and longScore >= relaxedFastMinScore and (not effUseSMCICT or longSMCHits >= effFastSMCHits) and close > emaFast and emaFast > emaSlow and bullSlopeOK and bullCandleOK and longNoChaseOK
-shortFastSignal = inSession and cooldownOK and entrySpacingOK and htfShortOK and pdShortOK and macdShortOK and qualityShortOK and effUseFastEntries and shortScore >= relaxedFastMinScore and (not effUseSMCICT or shortSMCHits >= effFastSMCHits) and close < emaFast and emaFast < emaSlow and bearSlopeOK and bearCandleOK and shortNoChaseOK
+longFastSignal = inSession and cooldownOK and entrySpacingOK and htfLongOK and pdLongOK and macdLongOK and qualityLongOK and effUseFastEntries and vwapLongTouch and longScore >= relaxedFastMinScore and (not effUseSMCICT or longSMCHits >= effFastSMCHits) and bullSlopeOK and bullCandleOK and longNoChaseOK
+shortFastSignal = inSession and cooldownOK and entrySpacingOK and htfShortOK and pdShortOK and macdShortOK and qualityShortOK and effUseFastEntries and vwapShortTouch and shortScore >= relaxedFastMinScore and (not effUseSMCICT or shortSMCHits >= effFastSMCHits) and bearSlopeOK and bearCandleOK and shortNoChaseOK
 
 longHCSweepOK = not effHCRequireSweep or sweepLow
 shortHCSweepOK = not effHCRequireSweep or sweepHigh
 longHCBOSOK = not effHCRequireBOS or bullBOS
 shortHCBOSOK = not effHCRequireBOS or bearBOS
 
-longHCSignal = inSession and cooldownOK and htfBull and inDiscount and macdBullConfirm and stBull and adxVal >= adxMin and longScore >= effHCMinScore and longSMCHits >= effHCMinSMCHits and longHCSweepOK and longHCBOSOK and close > emaSlow and bullSlopeOK and bullCandleOK and longNoChaseOK and tpModeLongOK
-shortHCSignal = inSession and cooldownOK and htfBear and inPremium and macdBearConfirm and stBear and adxVal >= adxMin and shortScore >= effHCMinScore and shortSMCHits >= effHCMinSMCHits and shortHCSweepOK and shortHCBOSOK and close < emaSlow and bearSlopeOK and bearCandleOK and shortNoChaseOK and tpModeShortOK
+longHCSignal = inSession and cooldownOK and htfBull and inDiscount and macdBullConfirm and stBull and adxVal >= adxMin and vwapLongTouch and longScore >= effHCMinScore and longSMCHits >= effHCMinSMCHits and longHCSweepOK and longHCBOSOK and bullSlopeOK and bullCandleOK and longNoChaseOK and tpModeLongOK
+shortHCSignal = inSession and cooldownOK and htfBear and inPremium and macdBearConfirm and stBear and adxVal >= adxMin and vwapShortTouch and shortScore >= effHCMinScore and shortSMCHits >= effHCMinSMCHits and shortHCSweepOK and shortHCBOSOK and bearSlopeOK and bearCandleOK and shortNoChaseOK and tpModeShortOK
 
 longSignal  = effUseHighConfidence ? longHCSignal : (longSignalCore or longFastSignal)
 shortSignal = effUseHighConfidence ? shortHCSignal : (shortSignalCore or shortFastSignal)
@@ -520,8 +515,7 @@ if entryBias == -1 and tradeDir >= 0 and not longEntrySignal
 // =========================
 // Visuals
 // =========================
-plot(emaFast, "EMA Fast", color=color.new(color.teal, 0), linewidth=2)
-plot(emaSlow, "EMA Slow", color=color.new(color.orange, 0), linewidth=2)
+plot(vwapVal, "VWAP", color=color.new(color.yellow, 0), linewidth=vwapLineWidth)
 plot(stLine, "Supertrend", color=stBull ? color.new(color.lime, 0) : color.new(color.red, 0), linewidth=2)
 
 plotshape(longEntrySignal,  title="Buy Signal",  style=shape.labelup,   location=location.belowbar, color=color.new(color.lime, 0), text="BUY",  textcolor=color.black, size=size.tiny)
