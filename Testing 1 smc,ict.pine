@@ -1,0 +1,564 @@
+//@version=6
+indicator("XAUUSD Volatility Multi-Filter Signal v1",
+    overlay=true,
+    max_labels_count=500)
+
+// =========================
+// Inputs
+// =========================
+tfNote = input.string("Use on M15-H1 for XAUUSD", "Note", options=["Use on M15-H1 for XAUUSD"])
+
+emaFastLen   = input.int(50,  "EMA Fast", minval=1)
+emaSlowLen   = input.int(200, "EMA Slow", minval=1)
+
+rsiLen       = input.int(14, "RSI Length", minval=1)
+rsiLongMin   = input.int(55, "RSI Long Min", minval=1, maxval=100)
+rsiShortMax  = input.int(45, "RSI Short Max", minval=1, maxval=100)
+
+macdFast     = input.int(12, "MACD Fast", minval=1)
+macdSlow     = input.int(26, "MACD Slow", minval=1)
+macdSignal   = input.int(9,  "MACD Signal", minval=1)
+
+adxLen       = input.int(14, "ADX Length", minval=1)
+adxMin       = input.float(18.0, "ADX Min Trend Strength", step=0.1)
+
+atrLen       = input.int(14, "ATR Length", minval=1)
+atrVolLen    = input.int(50, "ATR Baseline Length", minval=1)
+atrVolMult   = input.float(1.05, "Volatility Threshold Multiplier", step=0.01)
+
+stAtrLen     = input.int(10, "Supertrend ATR Length", minval=1)
+stFactor     = input.float(2.5, "Supertrend Factor", step=0.1)
+
+minScore     = input.int(3, "Minimum Score to Trigger", minval=1, maxval=7)
+
+useSession   = input.bool(false, "Use Session Filter")
+sessionInput = input.session("1300-2300", "Session (Exchange Time)")
+
+htfTf         = input.timeframe("240", "HTF Bias Timeframe")
+htfEmaLen     = input.int(200, "HTF EMA Length", minval=20)
+useHTFBias    = input.bool(false, "Use HTF Bias Filter")
+dealingLen    = input.int(60, "Premium/Discount Range", minval=10)
+usePDFilter   = input.bool(false, "Use Premium/Discount Filter")
+
+useSMCICT      = input.bool(true, "Use SMC/ICT Filters")
+smcMode        = input.string("Aggressive", "SMC/ICT Mode", options=["Strict", "Balanced", "Aggressive", "Off"])
+smcSwingLen    = input.int(5, "SMC Swing Length", minval=2)
+requireSweep   = input.bool(true, "Use Liquidity Sweep")
+requireMSS     = input.bool(false, "Use Market Structure Shift (BOS)")
+requireCHoCH   = input.bool(false, "Use CHoCH Confirmation")
+requireOB      = input.bool(false, "Require Order Block Retest")
+requireFVG     = input.bool(false, "Require Recent FVG")
+requireFVGFill = input.bool(false, "Require FVG Fill")
+fvgLookback    = input.int(10, "FVG Lookback Bars", minval=1)
+
+useFastEntries = input.bool(true, "Use Fast Entries")
+fastMinScore   = input.int(3, "Fast Entry Min Score", minval=1, maxval=9)
+fastSMCHits    = input.int(0, "Fast Entry Min SMC Hits", minval=0, maxval=6)
+useMACDConfirm = input.bool(false, "Use MACD Confirm")
+macdCrossLookback = input.int(5, "MACD Cross Lookback", minval=1, maxval=20)
+
+useHighConfidence = input.bool(false, "Use High-Confidence Mode")
+hcMinScore        = input.int(6, "HC Min Score", minval=1, maxval=9)
+hcMinSMCHits      = input.int(2, "HC Min SMC Hits", minval=0, maxval=6)
+hcRequireSweep    = input.bool(true, "HC Require Sweep")
+hcRequireBOS      = input.bool(true, "HC Require BOS")
+
+riskATR_SL   = input.float(1.6, "Stop Loss ATR Mult", step=0.1)
+riskATR_TP   = input.float(2.4, "Take Profit ATR Mult", step=0.1)
+minRR        = input.float(1.8, "Minimum RR", step=0.1)
+tpMode       = input.string("Fixed Pips", "Take Profit Mode", options=["Fixed Pips", "ATR/RR"])
+pipSize      = input.float(0.01, "Pip Size", step=0.001, minval=0.001)
+useMultiTP   = input.bool(true, "Use TP1/TP2/TP3")
+tp1Pips      = input.int(70, "TP1 Pips", minval=1)
+tp2Pips      = input.int(130, "TP2 Pips", minval=1)
+tp3Pips      = input.int(200, "TP3 Pips", minval=1)
+tp1RR        = input.float(1.0, "TP1 RR", step=0.1)
+tp2RR        = input.float(1.8, "TP2 RR", step=0.1)
+tp3RR        = input.float(2.8, "TP3 RR", step=0.1)
+tp1Qty       = input.float(40.0, "TP1 Qty %", step=1.0, minval=0, maxval=100)
+tp2Qty       = input.float(30.0, "TP2 Qty %", step=1.0, minval=0, maxval=100)
+showTPSLLevels = input.bool(true, "Show TP/SL Levels")
+useLiqTP     = input.bool(true, "Use Next Liquidity As TP")
+useTrail     = input.bool(true, "Use ATR Trailing Stop")
+trailATRMult = input.float(1.0, "Trailing ATR Mult", step=0.1)
+useBreakEven = input.bool(true, "Use Break-even Protection")
+beTriggerATR = input.float(1.0, "Break-even Trigger ATR", step=0.1)
+beOffsetATR  = input.float(0.1, "Break-even Offset ATR", step=0.1)
+maxBarsInTrade = input.int(80, "Max Bars In Trade", minval=0)
+cooldownBars = input.int(1, "Cooldown Bars After Exit", minval=0)
+useMaxDDStop = input.bool(true, "Use Max Drawdown Guard")
+maxDDPct     = input.float(25.0, "Max Drawdown %", step=0.5)
+strategyProfile = input.string("Balanced", "Strategy Profile", options=["Custom", "Safe", "Balanced", "Aggressive"])
+
+useQualityGate = input.bool(true, "Use Quality Gate")
+hardAdxMin = input.float(20.0, "Hard ADX Min", step=0.1)
+minEmaGapAtr = input.float(0.15, "Min EMA Gap (ATR Mult)", step=0.01)
+atrUpperBandMult = input.float(2.2, "ATR Upper Band Mult", step=0.1)
+minBarsBetweenEntries = input.int(6, "Min Bars Between Entries", minval=0)
+useAdxInScore = input.bool(false, "Use ADX In Score")
+useSupertrendInScore = input.bool(false, "Use Supertrend In Score")
+useHtfInScore = input.bool(false, "Use HTF In Score")
+usePdInScore = input.bool(false, "Use Premium/Discount In Score")
+useDryMode = input.bool(true, "Use Anti-Dry Mode")
+dryBarsTrigger = input.int(120, "Dry Mode Trigger Bars", minval=20)
+dryRelaxSMC = input.bool(true, "Dry Mode Relax SMC")
+requireTrendSlope = input.bool(true, "Require EMA Slope Alignment")
+slopeLookback = input.int(3, "EMA Slope Lookback", minval=1)
+useEntryCandleFilter = input.bool(true, "Require Entry Candle Momentum")
+entryBodyAtrMin = input.float(0.2, "Min Candle Body (ATR)", step=0.05, minval=0.0)
+useNoChaseFilter = input.bool(true, "Avoid Chasing Extended Entries")
+maxEntryStretchATR = input.float(0.75, "Max Distance From EMA Fast (ATR)", step=0.05, minval=0.1)
+
+isSafe = strategyProfile == "Safe"
+isBalanced = strategyProfile == "Balanced"
+isAggressive = strategyProfile == "Aggressive"
+
+effUseSession = strategyProfile == "Custom" ? useSession : isSafe
+effUseHTFBias = strategyProfile == "Custom" ? useHTFBias : (isSafe or isBalanced)
+effUsePDFilter = strategyProfile == "Custom" ? usePDFilter : isSafe
+effUseSMCICT = strategyProfile == "Custom" ? useSMCICT : isSafe
+effSMCMode = strategyProfile == "Custom" ? smcMode : isSafe ? "Strict" : isBalanced ? "Balanced" : "Aggressive"
+
+effRequireSweep = strategyProfile == "Custom" ? requireSweep : true
+effRequireMSS = strategyProfile == "Custom" ? requireMSS : not isAggressive
+effRequireCHoCH = strategyProfile == "Custom" ? requireCHoCH : isSafe
+effRequireOB = strategyProfile == "Custom" ? requireOB : isSafe
+effRequireFVG = strategyProfile == "Custom" ? requireFVG : isSafe
+effRequireFVGFill = strategyProfile == "Custom" ? requireFVGFill : false
+
+effUseMACDConfirm = strategyProfile == "Custom" ? useMACDConfirm : (isSafe or isBalanced)
+effMinScore = strategyProfile == "Custom" ? minScore : isSafe ? 7 : isBalanced ? 5 : 4
+effUseFastEntries = strategyProfile == "Custom" ? useFastEntries : not isSafe
+effFastMinScore = strategyProfile == "Custom" ? fastMinScore : isSafe ? 7 : isBalanced ? 5 : 4
+effFastSMCHits = strategyProfile == "Custom" ? fastSMCHits : isSafe ? 3 : isBalanced ? 2 : 1
+
+effUseHighConfidence = strategyProfile == "Custom" ? useHighConfidence : isSafe
+effHCMinScore = strategyProfile == "Custom" ? hcMinScore : isSafe ? 7 : isBalanced ? 6 : 5
+effHCMinSMCHits = strategyProfile == "Custom" ? hcMinSMCHits : isSafe ? 3 : isBalanced ? 2 : 1
+effHCRequireSweep = strategyProfile == "Custom" ? hcRequireSweep : true
+effHCRequireBOS = strategyProfile == "Custom" ? hcRequireBOS : true
+
+effRiskATRSL = strategyProfile == "Custom" ? riskATR_SL : isSafe ? 1.3 : isBalanced ? 1.5 : 1.8
+effRiskATRTP = strategyProfile == "Custom" ? riskATR_TP : isSafe ? 2.6 : isBalanced ? 2.3 : 2.0
+effMinRR = strategyProfile == "Custom" ? minRR : isSafe ? 2.2 : isBalanced ? 1.8 : 1.3
+effUseMultiTP = strategyProfile == "Custom" ? useMultiTP : true
+effTP1RR = strategyProfile == "Custom" ? tp1RR : isSafe ? 1.2 : isBalanced ? 1.0 : 0.8
+effTP2RR = strategyProfile == "Custom" ? tp2RR : isSafe ? 2.0 : isBalanced ? 1.8 : 1.4
+effTP3RR = strategyProfile == "Custom" ? tp3RR : isSafe ? 3.2 : isBalanced ? 2.8 : 2.2
+effTP1Qty = strategyProfile == "Custom" ? tp1Qty : isSafe ? 30.0 : isBalanced ? 40.0 : 50.0
+effTP2Qty = strategyProfile == "Custom" ? tp2Qty : isSafe ? 30.0 : isBalanced ? 30.0 : 30.0
+effUseTrail = strategyProfile == "Custom" ? useTrail : not isAggressive
+effTrailATRMult = strategyProfile == "Custom" ? trailATRMult : isSafe ? 0.8 : isBalanced ? 1.0 : 1.2
+effUseBreakEven = strategyProfile == "Custom" ? useBreakEven : true
+effBETriggerATR = strategyProfile == "Custom" ? beTriggerATR : isSafe ? 0.8 : isBalanced ? 1.0 : 1.2
+effBEOffsetATR = strategyProfile == "Custom" ? beOffsetATR : isSafe ? 0.15 : isBalanced ? 0.1 : 0.05
+effMaxBarsInTrade = strategyProfile == "Custom" ? maxBarsInTrade : isSafe ? 60 : isBalanced ? 80 : 120
+effCooldownBars = strategyProfile == "Custom" ? cooldownBars : isSafe ? 10 : isBalanced ? 6 : 3
+effHardAdxMin = strategyProfile == "Custom" ? hardAdxMin : isSafe ? 22.0 : isBalanced ? 20.0 : 18.0
+effMinEmaGapAtr = strategyProfile == "Custom" ? minEmaGapAtr : isSafe ? 0.22 : isBalanced ? 0.15 : 0.1
+effAtrUpperBandMult = strategyProfile == "Custom" ? atrUpperBandMult : isSafe ? 2.0 : isBalanced ? 2.2 : 2.6
+effMinBarsBetweenEntries = strategyProfile == "Custom" ? minBarsBetweenEntries : isSafe ? 10 : isBalanced ? 8 : 4
+effUseQualityGate = strategyProfile == "Custom" ? useQualityGate : not isAggressive
+
+// ADX fallback for environments where ta.adx is unavailable.
+f_adx(_len) =>
+    upMove = high - high[1]
+    downMove = low[1] - low
+
+    plusDM = upMove > downMove and upMove > 0 ? upMove : 0.0
+    minusDM = downMove > upMove and downMove > 0 ? downMove : 0.0
+
+    tr = ta.tr(true)
+    trRma = ta.rma(tr, _len)
+    plusRma = ta.rma(plusDM, _len)
+    minusRma = ta.rma(minusDM, _len)
+
+    plusDI = trRma == 0 ? 0.0 : 100 * plusRma / trRma
+    minusDI = trRma == 0 ? 0.0 : 100 * minusRma / trRma
+    diSum = plusDI + minusDI
+    dx = diSum == 0 ? 0.0 : 100 * math.abs(plusDI - minusDI) / diSum
+    ta.rma(dx, _len)
+
+// =========================
+// Indicators
+// =========================
+emaFast = ta.ema(close, emaFastLen)
+emaSlow = ta.ema(close, emaSlowLen)
+
+rsiVal = ta.rsi(close, rsiLen)
+
+macdLine = ta.ema(close, macdFast) - ta.ema(close, macdSlow)
+macdSig  = ta.ema(macdLine, macdSignal)
+macdHist = macdLine - macdSig
+
+macdBullCross = ta.crossover(macdLine, macdSig)
+macdBearCross = ta.crossunder(macdLine, macdSig)
+macdBullConfirm = ta.barssince(macdBullCross) <= macdCrossLookback and macdHist > 0
+macdBearConfirm = ta.barssince(macdBearCross) <= macdCrossLookback and macdHist < 0
+
+adxVal = f_adx(adxLen)
+
+atrVal = ta.atr(atrLen)
+atrBase = ta.sma(atrVal, atrVolLen)
+volatileEnough = atrVal > atrBase * atrVolMult
+
+[stLine, stDir] = ta.supertrend(stFactor, stAtrLen)
+stBull = close > stLine
+stBear = close < stLine
+
+inSession = effUseSession ? not na(time(timeframe.period, sessionInput)) : true
+
+htfClose = request.security(syminfo.tickerid, htfTf, close)
+htfEma = request.security(syminfo.tickerid, htfTf, ta.ema(close, htfEmaLen))
+htfBull = htfClose > htfEma
+htfBear = htfClose < htfEma
+
+dealingHigh = ta.highest(high, dealingLen)
+dealingLow = ta.lowest(low, dealingLen)
+dealingMid = (dealingHigh + dealingLow) * 0.5
+inDiscount = close < dealingMid
+inPremium = close > dealingMid
+
+// =========================
+// SMC / ICT Filters
+// =========================
+ph = ta.pivothigh(high, smcSwingLen, smcSwingLen)
+pl = ta.pivotlow(low, smcSwingLen, smcSwingLen)
+
+var float lastSwingHigh = na
+var float lastSwingLow = na
+var int structureState = 0
+var float bullOBHigh = na
+var float bullOBLow = na
+var float bearOBHigh = na
+var float bearOBLow = na
+var float bullFVGTop = na
+var float bullFVGBottom = na
+var float bearFVGTop = na
+var float bearFVGBottom = na
+
+if not na(ph)
+    lastSwingHigh := ph
+
+if not na(pl)
+    lastSwingLow := pl
+
+bullBOS = not na(lastSwingHigh) and close > lastSwingHigh
+bearBOS = not na(lastSwingLow) and close < lastSwingLow
+
+prevState = nz(structureState[1], 0)
+bullCHoCH = prevState == -1 and bullBOS
+bearCHoCH = prevState == 1 and bearBOS
+structureState := bullBOS ? 1 : bearBOS ? -1 : prevState
+
+sweepLow = not na(lastSwingLow) and low < lastSwingLow and close > lastSwingLow
+sweepHigh = not na(lastSwingHigh) and high > lastSwingHigh and close < lastSwingHigh
+
+bullFVG = low > high[2]
+bearFVG = high < low[2]
+
+if bullFVG
+    bullFVGTop := low
+    bullFVGBottom := high[2]
+
+if bearFVG
+    bearFVGTop := low[2]
+    bearFVGBottom := high
+
+bullFVGFill = not na(bullFVGTop) and low <= bullFVGTop and high >= bullFVGBottom
+bearFVGFill = not na(bearFVGTop) and high >= bearFVGBottom and low <= bearFVGTop
+
+if bullBOS
+    bullOBHigh := ta.valuewhen(close < open, high, 0)
+    bullOBLow := ta.valuewhen(close < open, low, 0)
+
+if bearBOS
+    bearOBHigh := ta.valuewhen(close > open, high, 0)
+    bearOBLow := ta.valuewhen(close > open, low, 0)
+
+inBullOB = not na(bullOBHigh) and not na(bullOBLow) and low <= bullOBHigh and close >= bullOBLow
+inBearOB = not na(bearOBHigh) and not na(bearOBLow) and high >= bearOBLow and close <= bearOBHigh
+
+bullFVGRecent = ta.barssince(bullFVG) <= fvgLookback
+bearFVGRecent = ta.barssince(bearFVG) <= fvgLookback
+
+smcSelectedCount = (effRequireSweep ? 1 : 0) + (effRequireMSS ? 1 : 0) + (effRequireCHoCH ? 1 : 0) + (effRequireOB ? 1 : 0) + (effRequireFVG ? 1 : 0) + (effRequireFVGFill ? 1 : 0)
+smcNeedBalanced = smcSelectedCount == 0 ? 0 : int(math.ceil(smcSelectedCount * 0.5))
+
+longSMCHits = (effRequireSweep and sweepLow ? 1 : 0) + (effRequireMSS and bullBOS ? 1 : 0) + (effRequireCHoCH and bullCHoCH ? 1 : 0) + (effRequireOB and inBullOB ? 1 : 0) + (effRequireFVG and bullFVGRecent ? 1 : 0) + (effRequireFVGFill and bullFVGFill ? 1 : 0)
+shortSMCHits = (effRequireSweep and sweepHigh ? 1 : 0) + (effRequireMSS and bearBOS ? 1 : 0) + (effRequireCHoCH and bearCHoCH ? 1 : 0) + (effRequireOB and inBearOB ? 1 : 0) + (effRequireFVG and bearFVGRecent ? 1 : 0) + (effRequireFVGFill and bearFVGFill ? 1 : 0)
+
+longSMCStrict = smcSelectedCount == 0 or longSMCHits == smcSelectedCount
+shortSMCStrict = smcSelectedCount == 0 or shortSMCHits == smcSelectedCount
+
+longSMCBalanced = smcSelectedCount == 0 or longSMCHits >= smcNeedBalanced
+shortSMCBalanced = smcSelectedCount == 0 or shortSMCHits >= smcNeedBalanced
+
+longSMCAggressive = smcSelectedCount == 0 or longSMCHits >= 1
+shortSMCAggressive = smcSelectedCount == 0 or shortSMCHits >= 1
+
+longSMCPass = (not effUseSMCICT or effSMCMode == "Off") ? true : effSMCMode == "Strict" ? longSMCStrict : effSMCMode == "Balanced" ? longSMCBalanced : longSMCAggressive
+shortSMCPass = (not effUseSMCICT or effSMCMode == "Off") ? true : effSMCMode == "Strict" ? shortSMCStrict : effSMCMode == "Balanced" ? shortSMCBalanced : shortSMCAggressive
+
+// =========================
+// Scoring system (multi-filter)
+// =========================
+longScore = 0
+longScore += close > emaFast ? 1 : 0
+longScore += emaFast > emaSlow ? 1 : 0
+longScore += rsiVal >= rsiLongMin ? 1 : 0
+longScore += macdLine > macdSig and macdHist > 0 ? 1 : 0
+longScore += useAdxInScore and adxVal >= adxMin ? 1 : 0
+longScore += volatileEnough ? 1 : 0
+longScore += useSupertrendInScore and stBull ? 1 : 0
+longScore += useHtfInScore and htfBull ? 1 : 0
+longScore += usePdInScore and inDiscount ? 1 : 0
+
+shortScore = 0
+shortScore += close < emaFast ? 1 : 0
+shortScore += emaFast < emaSlow ? 1 : 0
+shortScore += rsiVal <= rsiShortMax ? 1 : 0
+shortScore += macdLine < macdSig and macdHist < 0 ? 1 : 0
+shortScore += useAdxInScore and adxVal >= adxMin ? 1 : 0
+shortScore += volatileEnough ? 1 : 0
+shortScore += useSupertrendInScore and stBear ? 1 : 0
+shortScore += useHtfInScore and htfBear ? 1 : 0
+shortScore += usePdInScore and inPremium ? 1 : 0
+
+scoreMax = 6 + (useAdxInScore ? 1 : 0) + (useSupertrendInScore ? 1 : 0) + (useHtfInScore ? 1 : 0) + (usePdInScore ? 1 : 0)
+
+var int tradeDir = 0
+var float tradeEntryPrice = na
+var float tradeEntryAtr = na
+var float tradeStop = na
+var float tradeTP1 = na
+var float tradeTP2 = na
+var float tradeTP3 = na
+var int tradeEntryBar = na
+var int lastExitBar = na
+var int lastSignalBar = na
+var string lastExitReason = "Flat"
+var bool tp1Reached = false
+var bool tp2Reached = false
+
+barsSinceEntry = na(lastSignalBar) ? bar_index : bar_index - lastSignalBar
+dryModeOn = useDryMode and barsSinceEntry >= dryBarsTrigger
+
+relaxedMinScore = dryModeOn ? math.max(3, effMinScore - 1) : effMinScore
+relaxedFastMinScore = dryModeOn ? math.max(3, effFastMinScore - 1) : effFastMinScore
+relaxedHardAdx = dryModeOn ? math.max(14.0, effHardAdxMin - 2.0) : effHardAdxMin
+relaxedMinEmaGap = dryModeOn ? math.max(0.05, effMinEmaGapAtr - 0.04) : effMinEmaGapAtr
+
+longSMCPassFinal = dryModeOn and dryRelaxSMC and effUseSMCICT and effSMCMode != "Off" ? (effSMCMode == "Strict" ? longSMCBalanced : longSMCAggressive) : longSMCPass
+shortSMCPassFinal = dryModeOn and dryRelaxSMC and effUseSMCICT and effSMCMode != "Off" ? (effSMCMode == "Strict" ? shortSMCBalanced : shortSMCAggressive) : shortSMCPass
+
+cooldownOK = na(lastExitBar) or (bar_index - lastExitBar >= effCooldownBars)
+entrySpacingOK = na(lastSignalBar) or (bar_index - lastSignalBar >= effMinBarsBetweenEntries)
+htfLongOK = not effUseHTFBias or htfBull
+htfShortOK = not effUseHTFBias or htfBear
+pdLongOK = not effUsePDFilter or inDiscount
+pdShortOK = not effUsePDFilter or inPremium
+macdLongOK = not effUseMACDConfirm or macdBullConfirm
+macdShortOK = not effUseMACDConfirm or macdBearConfirm
+
+emaGap = math.abs(emaFast - emaSlow)
+emaGapOK = emaGap >= atrVal * relaxedMinEmaGap
+hardAdxOK = adxVal >= relaxedHardAdx
+volBandOK = atrVal > atrBase * atrVolMult and atrVal < atrBase * effAtrUpperBandMult
+emaFastSlope = emaFast - emaFast[slopeLookback]
+emaSlowSlope = emaSlow - emaSlow[slopeLookback]
+candleBody = math.abs(close - open)
+entryStretchATR = atrVal == 0 ? 0.0 : math.abs(close - emaFast) / atrVal
+bullSlopeOK = not requireTrendSlope or (emaFastSlope > 0 and emaSlowSlope >= 0)
+bearSlopeOK = not requireTrendSlope or (emaFastSlope < 0 and emaSlowSlope <= 0)
+bullCandleOK = not useEntryCandleFilter or (close > open and candleBody >= atrVal * entryBodyAtrMin)
+bearCandleOK = not useEntryCandleFilter or (close < open and candleBody >= atrVal * entryBodyAtrMin)
+longNoChaseOK = not useNoChaseFilter or close <= emaFast + atrVal * maxEntryStretchATR
+shortNoChaseOK = not useNoChaseFilter or close >= emaFast - atrVal * maxEntryStretchATR
+fixedTp1Dist = tp1Pips * pipSize
+fixedTp2Dist = tp2Pips * pipSize
+fixedTp3Dist = tp3Pips * pipSize
+longProjectedRisk = atrVal * effRiskATRSL
+shortProjectedRisk = atrVal * effRiskATRSL
+longProjectedRR = longProjectedRisk == 0 ? 0.0 : fixedTp2Dist / longProjectedRisk
+shortProjectedRR = shortProjectedRisk == 0 ? 0.0 : fixedTp2Dist / shortProjectedRisk
+tpModeLongOK = tpMode == "ATR/RR" or longProjectedRR >= effMinRR
+tpModeShortOK = tpMode == "ATR/RR" or shortProjectedRR >= effMinRR
+qualityLongOK = not effUseQualityGate or (hardAdxOK and emaGapOK and volBandOK and stBull and bullSlopeOK and bullCandleOK and longNoChaseOK and tpModeLongOK)
+qualityShortOK = not effUseQualityGate or (hardAdxOK and emaGapOK and volBandOK and stBear and bearSlopeOK and bearCandleOK and shortNoChaseOK and tpModeShortOK)
+
+longSignalCore = inSession and cooldownOK and entrySpacingOK and htfLongOK and pdLongOK and macdLongOK and qualityLongOK and longScore >= relaxedMinScore and longSMCPassFinal
+shortSignalCore = inSession and cooldownOK and entrySpacingOK and htfShortOK and pdShortOK and macdShortOK and qualityShortOK and shortScore >= relaxedMinScore and shortSMCPassFinal
+
+longFastSignal = inSession and cooldownOK and entrySpacingOK and htfLongOK and pdLongOK and macdLongOK and qualityLongOK and effUseFastEntries and longScore >= relaxedFastMinScore and (not effUseSMCICT or longSMCHits >= effFastSMCHits) and close > emaFast and emaFast > emaSlow and bullSlopeOK and bullCandleOK and longNoChaseOK
+shortFastSignal = inSession and cooldownOK and entrySpacingOK and htfShortOK and pdShortOK and macdShortOK and qualityShortOK and effUseFastEntries and shortScore >= relaxedFastMinScore and (not effUseSMCICT or shortSMCHits >= effFastSMCHits) and close < emaFast and emaFast < emaSlow and bearSlopeOK and bearCandleOK and shortNoChaseOK
+
+longHCSweepOK = not effHCRequireSweep or sweepLow
+shortHCSweepOK = not effHCRequireSweep or sweepHigh
+longHCBOSOK = not effHCRequireBOS or bullBOS
+shortHCBOSOK = not effHCRequireBOS or bearBOS
+
+longHCSignal = inSession and cooldownOK and htfBull and inDiscount and macdBullConfirm and stBull and adxVal >= adxMin and longScore >= effHCMinScore and longSMCHits >= effHCMinSMCHits and longHCSweepOK and longHCBOSOK and close > emaSlow and bullSlopeOK and bullCandleOK and longNoChaseOK and tpModeLongOK
+shortHCSignal = inSession and cooldownOK and htfBear and inPremium and macdBearConfirm and stBear and adxVal >= adxMin and shortScore >= effHCMinScore and shortSMCHits >= effHCMinSMCHits and shortHCSweepOK and shortHCBOSOK and close < emaSlow and bearSlopeOK and bearCandleOK and shortNoChaseOK and tpModeShortOK
+
+longSignal  = effUseHighConfidence ? longHCSignal : (longSignalCore or longFastSignal)
+shortSignal = effUseHighConfidence ? shortHCSignal : (shortSignalCore or shortFastSignal)
+
+// =========================
+// Indicator trade state
+// =========================
+longEntrySignal = false
+shortEntrySignal = false
+longExitSignal = false
+shortExitSignal = false
+
+if tradeDir > 0
+    baseLongStop = tradeEntryPrice - tradeEntryAtr * effRiskATRSL
+    longBE = effUseBreakEven and high >= tradeEntryPrice + tradeEntryAtr * effBETriggerATR ? tradeEntryPrice + tradeEntryAtr * effBEOffsetATR : na
+    longTrail = effUseTrail ? close - atrVal * effTrailATRMult : na
+    tradeStop := na(longBE) ? baseLongStop : math.max(baseLongStop, longBE)
+    tradeStop := effUseTrail ? math.max(tradeStop, longTrail) : tradeStop
+
+    tp1Reached := tp1Reached or high >= tradeTP1
+    tp2Reached := tp2Reached or high >= tradeTP2
+
+    barsInTrade = na(tradeEntryBar) ? 0 : bar_index - tradeEntryBar
+    stopHit = low <= tradeStop
+    targetHit = high >= tradeTP3
+    timeHit = effMaxBarsInTrade > 0 and barsInTrade >= effMaxBarsInTrade
+
+    if stopHit or targetHit or timeHit
+        longExitSignal := true
+        lastExitBar := bar_index
+        lastExitReason := stopHit ? "Long SL" : targetHit ? "Long TP3" : "Long Time Exit"
+        tradeDir := 0
+        tradeEntryPrice := na
+        tradeEntryAtr := na
+        tradeStop := na
+        tradeTP1 := na
+        tradeTP2 := na
+        tradeTP3 := na
+        tradeEntryBar := na
+        tp1Reached := false
+        tp2Reached := false
+
+if tradeDir < 0
+    baseShortStop = tradeEntryPrice + tradeEntryAtr * effRiskATRSL
+    shortBE = effUseBreakEven and low <= tradeEntryPrice - tradeEntryAtr * effBETriggerATR ? tradeEntryPrice - tradeEntryAtr * effBEOffsetATR : na
+    shortTrail = effUseTrail ? close + atrVal * effTrailATRMult : na
+    tradeStop := na(shortBE) ? baseShortStop : math.min(baseShortStop, shortBE)
+    tradeStop := effUseTrail ? math.min(tradeStop, shortTrail) : tradeStop
+
+    tp1Reached := tp1Reached or low <= tradeTP1
+    tp2Reached := tp2Reached or low <= tradeTP2
+
+    barsInTrade = na(tradeEntryBar) ? 0 : bar_index - tradeEntryBar
+    stopHit = high >= tradeStop
+    targetHit = low <= tradeTP3
+    timeHit = effMaxBarsInTrade > 0 and barsInTrade >= effMaxBarsInTrade
+
+    if stopHit or targetHit or timeHit
+        shortExitSignal := true
+        lastExitBar := bar_index
+        lastExitReason := stopHit ? "Short SL" : targetHit ? "Short TP3" : "Short Time Exit"
+        tradeDir := 0
+        tradeEntryPrice := na
+        tradeEntryAtr := na
+        tradeStop := na
+        tradeTP1 := na
+        tradeTP2 := na
+        tradeTP3 := na
+        tradeEntryBar := na
+        tp1Reached := false
+        tp2Reached := false
+
+// =========================
+// Exits
+// =========================
+entryBias = longSignal and not shortSignal ? 1 : shortSignal and not longSignal ? -1 : longSignal and shortSignal ? (longScore > shortScore ? 1 : shortScore > longScore ? -1 : 0) : 0
+
+if entryBias == 1 and tradeDir <= 0
+    if tradeDir < 0
+        shortExitSignal := true
+        lastExitBar := bar_index
+        lastExitReason := "Reverse to Long"
+    longBaseStop = close - atrVal * effRiskATRSL
+    longRisk = math.max(close - longBaseStop, atrVal * 0.1)
+    tradeDir := 1
+    tradeEntryPrice := close
+    tradeEntryAtr := atrVal
+    tradeEntryBar := bar_index
+    lastSignalBar := bar_index
+    tradeStop := longBaseStop
+    tradeTP1 := tpMode == "Fixed Pips" ? close + fixedTp1Dist : close + longRisk * effTP1RR
+    tradeTP2 := tpMode == "Fixed Pips" ? close + fixedTp2Dist : close + longRisk * effTP2RR
+    tradeTP3 := tpMode == "Fixed Pips" ? close + fixedTp3Dist : close + longRisk * effTP3RR
+    tp1Reached := false
+    tp2Reached := false
+    longEntrySignal := true
+
+if entryBias == -1 and tradeDir >= 0 and not longEntrySignal
+    if tradeDir > 0
+        longExitSignal := true
+        lastExitBar := bar_index
+        lastExitReason := "Reverse to Short"
+    shortBaseStop = close + atrVal * effRiskATRSL
+    shortRisk = math.max(shortBaseStop - close, atrVal * 0.1)
+    tradeDir := -1
+    tradeEntryPrice := close
+    tradeEntryAtr := atrVal
+    tradeEntryBar := bar_index
+    lastSignalBar := bar_index
+    tradeStop := shortBaseStop
+    tradeTP1 := tpMode == "Fixed Pips" ? close - fixedTp1Dist : close - shortRisk * effTP1RR
+    tradeTP2 := tpMode == "Fixed Pips" ? close - fixedTp2Dist : close - shortRisk * effTP2RR
+    tradeTP3 := tpMode == "Fixed Pips" ? close - fixedTp3Dist : close - shortRisk * effTP3RR
+    tp1Reached := false
+    tp2Reached := false
+    shortEntrySignal := true
+
+// =========================
+// Visuals
+// =========================
+plot(emaFast, "EMA Fast", color=color.new(color.teal, 0), linewidth=2)
+plot(emaSlow, "EMA Slow", color=color.new(color.orange, 0), linewidth=2)
+plot(stLine, "Supertrend", color=stBull ? color.new(color.lime, 0) : color.new(color.red, 0), linewidth=2)
+
+plotshape(longEntrySignal,  title="Buy Signal",  style=shape.labelup,   location=location.belowbar, color=color.new(color.lime, 0), text="BUY",  textcolor=color.black, size=size.tiny)
+plotshape(shortEntrySignal, title="Sell Signal", style=shape.labeldown, location=location.abovebar, color=color.new(color.red, 0),  text="SELL", textcolor=color.white, size=size.tiny)
+plotshape(effUseHighConfidence and longHCSignal and entryBias == 1, title="HC Buy Signal", style=shape.labelup, location=location.belowbar, color=color.new(color.green, 0), text="HC BUY", textcolor=color.black, size=size.small)
+plotshape(effUseHighConfidence and shortHCSignal and entryBias == -1, title="HC Sell Signal", style=shape.labeldown, location=location.abovebar, color=color.new(color.maroon, 0), text="HC SELL", textcolor=color.white, size=size.small)
+plotshape(longExitSignal, title="Long Exit", style=shape.xcross, location=location.abovebar, color=color.new(color.orange, 0), size=size.tiny, text="LX")
+plotshape(shortExitSignal, title="Short Exit", style=shape.xcross, location=location.belowbar, color=color.new(color.orange, 0), size=size.tiny, text="SX")
+
+plotshape(useSMCICT and sweepLow, title="Buy-side Liquidity Sweep", style=shape.circle, location=location.belowbar, color=color.new(color.aqua, 0), size=size.tiny)
+plotshape(useSMCICT and sweepHigh, title="Sell-side Liquidity Sweep", style=shape.circle, location=location.abovebar, color=color.new(color.fuchsia, 0), size=size.tiny)
+plotshape(effUseMACDConfirm and macdBullCross, title="MACD Bull Cross", style=shape.triangleup, location=location.belowbar, color=color.new(color.green, 0), size=size.tiny)
+plotshape(effUseMACDConfirm and macdBearCross, title="MACD Bear Cross", style=shape.triangledown, location=location.abovebar, color=color.new(color.maroon, 0), size=size.tiny)
+
+activeSL = tradeDir != 0 ? tradeStop : na
+activeTP1 = tradeDir != 0 ? tradeTP1 : na
+activeTP2 = tradeDir != 0 and effUseMultiTP ? tradeTP2 : na
+activeTP3 = tradeDir != 0 ? tradeTP3 : na
+
+plot(showTPSLLevels ? activeSL : na, "SL", color=color.new(color.red, 0), linewidth=2, style=plot.style_linebr)
+plot(showTPSLLevels ? activeTP1 : na, "TP1", color=color.new(color.green, 0), linewidth=2, style=plot.style_linebr)
+plot(showTPSLLevels ? activeTP2 : na, "TP2", color=color.new(color.lime, 0), linewidth=2, style=plot.style_linebr)
+plot(showTPSLLevels ? activeTP3 : na, "TP3", color=color.new(color.teal, 0), linewidth=2, style=plot.style_linebr)
+
+// Score panel (simple)
+var label scoreLbl = na
+if barstate.islast
+    label.delete(scoreLbl)
+    scoreText = "Profile: " + strategyProfile + "\nDryMode: " + str.tostring(dryModeOn) + "\nLONG Score: " + str.tostring(longScore) + " / " + str.tostring(scoreMax) + "\nSHORT Score: " + str.tostring(shortScore) + " / " + str.tostring(scoreMax) + "\nTrade Dir: " + str.tostring(tradeDir) + "\nExit: " + lastExitReason
+    scoreLbl := label.new(bar_index, high, scoreText, style=label.style_label_left, textcolor=color.white, color=color.new(color.black, 40))
+
+// Alerts
+alertcondition(longEntrySignal, title="XAU Buy Signal", message="XAUUSD Buy Signal triggered")
+alertcondition(shortEntrySignal, title="XAU Sell Signal", message="XAUUSD Sell Signal triggered")
+alertcondition(longExitSignal, title="XAU Long Exit", message="XAUUSD Long exit triggered")
+alertcondition(shortExitSignal, title="XAU Short Exit", message="XAUUSD Short exit triggered")
+alertcondition(tradeDir > 0 and not tp1Reached[1] and tp1Reached, title="XAU Long TP1 Hit", message="XAUUSD Long TP1 hit")
+alertcondition(tradeDir < 0 and not tp1Reached[1] and tp1Reached, title="XAU Short TP1 Hit", message="XAUUSD Short TP1 hit")
+alertcondition(tradeDir > 0 and not tp2Reached[1] and tp2Reached, title="XAU Long TP2 Hit", message="XAUUSD Long TP2 hit")
+alertcondition(tradeDir < 0 and not tp2Reached[1] and tp2Reached, title="XAU Short TP2 Hit", message="XAUUSD Short TP2 hit")
