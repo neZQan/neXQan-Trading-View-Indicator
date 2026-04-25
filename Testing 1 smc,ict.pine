@@ -382,22 +382,25 @@ tpModeShortOK = tpMode == "ATR/RR" or shortProjectedRR >= effMinRR
 qualityLongOK = not effUseQualityGate or (hardAdxOK and vwapSlopeOK and volBandOK and stBull and bullSlopeOK and bullCandleOK and longNoChaseOK and tpModeLongOK)
 qualityShortOK = not effUseQualityGate or (hardAdxOK and vwapSlopeOK and volBandOK and stBear and bearSlopeOK and bearCandleOK and shortNoChaseOK and tpModeShortOK)
 
-longSignalCore = inSession and cooldownOK and entrySpacingOK and htfLongOK and pdLongOK and macdLongOK and qualityLongOK and vwapLongTouch and longScore >= relaxedMinScore and longSMCPassFinal
-shortSignalCore = inSession and cooldownOK and entrySpacingOK and htfShortOK and pdShortOK and macdShortOK and qualityShortOK and vwapShortTouch and shortScore >= relaxedMinScore and shortSMCPassFinal
+baseLongSignal = vwapLongTouch
+baseShortSignal = vwapShortTouch
 
-longFastSignal = inSession and cooldownOK and entrySpacingOK and htfLongOK and pdLongOK and macdLongOK and qualityLongOK and effUseFastEntries and vwapLongTouch and longScore >= relaxedFastMinScore and (not effUseSMCICT or longSMCHits >= effFastSMCHits) and bullSlopeOK and bullCandleOK and longNoChaseOK
-shortFastSignal = inSession and cooldownOK and entrySpacingOK and htfShortOK and pdShortOK and macdShortOK and qualityShortOK and effUseFastEntries and vwapShortTouch and shortScore >= relaxedFastMinScore and (not effUseSMCICT or shortSMCHits >= effFastSMCHits) and bearSlopeOK and bearCandleOK and shortNoChaseOK
+longSignalCore = baseLongSignal
+shortSignalCore = baseShortSignal
+
+longFastSignal = baseLongSignal
+shortFastSignal = baseShortSignal
 
 longHCSweepOK = not effHCRequireSweep or sweepLow
 shortHCSweepOK = not effHCRequireSweep or sweepHigh
 longHCBOSOK = not effHCRequireBOS or bullBOS
 shortHCBOSOK = not effHCRequireBOS or bearBOS
 
-longHCSignal = inSession and cooldownOK and htfBull and inDiscount and macdBullConfirm and stBull and adxVal >= adxMin and vwapLongTouch and longScore >= effHCMinScore and longSMCHits >= effHCMinSMCHits and longHCSweepOK and longHCBOSOK and bullSlopeOK and bullCandleOK and longNoChaseOK and tpModeLongOK
-shortHCSignal = inSession and cooldownOK and htfBear and inPremium and macdBearConfirm and stBear and adxVal >= adxMin and vwapShortTouch and shortScore >= effHCMinScore and shortSMCHits >= effHCMinSMCHits and shortHCSweepOK and shortHCBOSOK and bearSlopeOK and bearCandleOK and shortNoChaseOK and tpModeShortOK
+longHCSignal = baseLongSignal
+shortHCSignal = baseShortSignal
 
-longSignal  = effUseHighConfidence ? longHCSignal : (longSignalCore or longFastSignal)
-shortSignal = effUseHighConfidence ? shortHCSignal : (shortSignalCore or shortFastSignal)
+longSignal  = baseLongSignal
+shortSignal = baseShortSignal
 
 // =========================
 // Indicator trade state
@@ -470,7 +473,7 @@ if tradeDir < 0
 // =========================
 // Exits
 // =========================
-entryBias = longSignal and not shortSignal ? 1 : shortSignal and not longSignal ? -1 : longSignal and shortSignal ? (longScore > shortScore ? 1 : shortScore > longScore ? -1 : 0) : 0
+entryBias = longSignal ? 1 : shortSignal ? -1 : 0
 
 if entryBias == 1 and tradeDir <= 0
     if tradeDir < 0
