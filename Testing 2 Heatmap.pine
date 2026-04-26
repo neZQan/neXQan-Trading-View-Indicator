@@ -1,0 +1,306 @@
+//@version=6
+indicator("Reaction Heatmap Prototype", overlay=true, max_boxes_count=500, max_lines_count=500)
+
+// This script offers two profile modes:
+// 1. Reaction: bins recent candle interaction into a right-side profile.
+// 2. Liquidity: tracks unswept swing levels and profiles their remaining weight.
+// Pine cannot access a true historical order book, so this is an approximation.
+
+//------------------------------------------------------------------------------
+// Inputs
+//------------------------------------------------------------------------------
+profileBars = input.int(140, "Lookback Bars", minval=40, maxval=400, group="Profile")
+profileBins = input.int(42, "Price Bins", minval=16, maxval=80, group="Profile")
+rightPaddingBars = input.int(10, "Right Padding", minval=0, maxval=80, group="Profile")
+smoothBands = input.bool(true, "Smooth Neighbor Bins", group="Profile")
+showPoc = input.bool(true, "Show POC Line", group="Profile")
+
+heatmapSource = input.string("Reaction", "Heatmap Source", options=["Reaction", "Liquidity"], group="Scoring")
+volumeInfluence = input.float(0.8, "Volume Influence", minval=0.0, maxval=3.0, step=0.1, group="Scoring")
+bodyInfluence = input.float(0.4, "Body Influence", minval=0.0, maxval=2.0, step=0.1, group="Scoring")
+buySideWeight = input.float(1.0, "Buy-side Weight", minval=0.1, maxval=3.0, step=0.1, group="Scoring")
+sellSideWeight = input.float(1.0, "Sell-side Weight", minval=0.1, maxval=3.0, step=0.1, group="Scoring")
+
+showEMA = input.bool(true, "Show EMA", group="Display")
+emaLen = input.int(55, "EMA Length", minval=1, group="Display")
+baseTransparency = input.int(72, "Border Transparency", minval=0, maxval=95, group="Display")
+frameFillTransparency = input.int(96, "Frame Fill Transparency", minval=85, maxval=100, group="Display")
+showPeakMarker = input.bool(true, "Show Highest Point", group="Display")
+buyColor = input.color(color.rgb(34, 197, 94), "Buy-side Color", group="Display")
+sellColor = input.color(color.rgb(239, 68, 68), "Sell-side Color", group="Display")
+pocColor = input.color(color.rgb(255, 242, 185), "POC Color", group="Display")
+
+showLiquidityLines = input.bool(true, "Show Liquidity Lines", group="Liquidity")
+swingStrength = input.int(3, "Swing Strength", minval=1, maxval=20, group="Liquidity")
+liquidityAtrLen = input.int(14, "ATR Length", minval=1, maxval=100, group="Liquidity")
+liquidityOffsetAtr = input.float(0.6, "Offset ATR", minval=0.0, maxval=5.0, step=0.1, group="Liquidity")
+liquidityFreshness = input.float(0.35, "Freshness Bias", minval=0.0, maxval=1.0, step=0.05, group="Liquidity")
+
+//------------------------------------------------------------------------------
+// Helpers
+//------------------------------------------------------------------------------
+f_clamp_transparency(_value) =>
+    int(math.max(0, math.min(100, _value)))
+
+f_strength_transparency(_strength, _baseTransparency) =>
+    _clamped = math.max(0.0, math.min(1.0, _strength))
+    _fade = int(math.round((1.0 - _clamped) * 18.0))
+    f_clamp_transparency(_baseTransparency + _fade)
+
+f_line_width(_score, _maxScore) =>
+    _maxScore <= 0 ? 1 : int(math.max(1.0, math.min(4.0, math.round(_score / _maxScore * 4.0))))
+
+f_side_color(_buyScore, _sellScore, _buyColor, _sellColor) =>
+    _buyScore >= _sellScore ? _buyColor : _sellColor
+
+f_profile_color(_buyScore, _sellScore, _strength, _baseTransparency, _buyColor, _sellColor) =>
+    _baseColor = f_side_color(_buyScore, _sellScore, _buyColor, _sellColor)
+    _strongTransparency = f_clamp_transparency(_baseTransparency - 18)
+    _fade = int(math.round((1.0 - math.min(1.0, _strength)) * 8.0))
+    color.new(_baseColor, f_clamp_transparency(_strongTransparency + _fade))
+
+f_frame_fill_color(_buyScore, _sellScore, _strength, _frameFillTransparency, _buyColor, _sellColor) =>
+    _baseColor = f_side_color(_buyScore, _sellScore, _buyColor, _sellColor)
+    _strongTransparency = f_clamp_transparency(_frameFillTransparency - 14)
+    _fade = int(math.round((1.0 - math.min(1.0, _strength)) * 10.0))
+    color.new(_baseColor, f_clamp_transparency(_strongTransparency + _fade))
+
+//------------------------------------------------------------------------------
+// Persistent drawing handles
+//------------------------------------------------------------------------------
+var heatBoxes = array.new_box()
+var liquidityLines = array.new_line()
+var line pocLine = na
+var box peakMarker = na
+
+//------------------------------------------------------------------------------
+// Core series
+//------------------------------------------------------------------------------
+emaLine = ta.ema(close, emaLen)
+liquidityPivotHigh = ta.pivothigh(high, swingStrength, swingStrength)
+liquidityPivotLow = ta.pivotlow(low, swingStrength, swingStrength)
+liquidityAtrSeries = ta.atr(liquidityAtrLen)
+
+plot(showEMA ? emaLine : na, "EMA", color=color.rgb(242, 204, 52), linewidth=2)
+
+enoughBars = bar_index >= profileBars + swingStrength
+
+//------------------------------------------------------------------------------
+// Render on the last bar only so objects stay synchronized with the latest state.
+//------------------------------------------------------------------------------
+if barstate.islast
+    if array.size(heatBoxes) > 0
+        for index = 0 to array.size(heatBoxes) - 1
+            box.delete(array.get(heatBoxes, index))
+        array.clear(heatBoxes)
+
+    if array.size(liquidityLines) > 0
+        for index = 0 to array.size(liquidityLines) - 1
+            line.delete(array.get(liquidityLines, index))
+        array.clear(liquidityLines)
+
+    if not na(pocLine)
+        line.delete(pocLine)
+        pocLine := na
+
+    if not na(peakMarker)
+        box.delete(peakMarker)
+        peakMarker := na
+
+    if enoughBars
+        firstOffset = 0
+        lastOffset = profileBars - 1
+
+        float windowLow = na
+        float windowHigh = na
+        float volumeSum = 0.0
+
+        for offset = firstOffset to lastOffset
+            barLow = low[offset]
+            barHigh = high[offset]
+            windowLow := na(windowLow) ? barLow : math.min(windowLow, barLow)
+            windowHigh := na(windowHigh) ? barHigh : math.max(windowHigh, barHigh)
+            volumeSum += nz(volume[offset], 1)
+
+        priceSpan = math.max(windowHigh - windowLow, syminfo.mintick * profileBins)
+        binSize = priceSpan / profileBins
+        avgVolume = volumeSum / profileBars
+
+        buyScores = array.new_float(profileBins, 0.0)
+        sellScores = array.new_float(profileBins, 0.0)
+        usedLiquiditySource = false
+
+        liquidityPrices = array.new_float()
+        liquidityScores = array.new_float()
+        liquidityIsLower = array.new_bool()
+        liquidityOrigins = array.new_int()
+
+        if heatmapSource == "Liquidity"
+            for offsetStep = 0 to profileBars - 1
+                historyOffset = lastOffset - offsetStep
+                barLow = low[historyOffset]
+                barHigh = high[historyOffset]
+
+                if array.size(liquidityPrices) > 0
+                    activePrices = array.new_float()
+                    activeScores = array.new_float()
+                    activeIsLower = array.new_bool()
+                    activeOrigins = array.new_int()
+
+                    for levelIndex = 0 to array.size(liquidityPrices) - 1
+                        levelPrice = array.get(liquidityPrices, levelIndex)
+                        isLowerLiquidity = array.get(liquidityIsLower, levelIndex)
+                        levelScore = array.get(liquidityScores, levelIndex)
+                        levelOrigin = array.get(liquidityOrigins, levelIndex)
+                        levelBroken = isLowerLiquidity ? barLow < levelPrice : barHigh > levelPrice
+
+                        if not levelBroken
+                            array.push(activePrices, levelPrice)
+                            array.push(activeScores, levelScore)
+                            array.push(activeIsLower, isLowerLiquidity)
+                            array.push(activeOrigins, levelOrigin)
+
+                    liquidityPrices := activePrices
+                    liquidityScores := activeScores
+                    liquidityIsLower := activeIsLower
+                    liquidityOrigins := activeOrigins
+
+                pivotHigh = liquidityPivotHigh[historyOffset]
+                pivotLow = liquidityPivotLow[historyOffset]
+                atrValue = math.max(nz(liquidityAtrSeries[historyOffset], syminfo.mintick), syminfo.mintick)
+                normVol = avgVolume == 0 ? 1.0 : nz(volume[historyOffset], avgVolume) / avgVolume
+                ageFraction = profileBars <= 1 ? 0.0 : float(historyOffset - firstOffset) / float(profileBars - 1)
+                freshnessBoost = 1.0 + (1.0 - math.min(1.0, ageFraction)) * liquidityFreshness
+                barRange = math.max(barHigh - barLow, syminfo.mintick)
+                rangeExpansion = math.max(0.0, barRange / atrValue - 1.0)
+                impulseBoost = 1.0 + math.min(1.0, rangeExpansion) * 0.35
+                baseScore = freshnessBoost * impulseBoost * (1.0 + math.max(0.0, normVol - 1.0) * volumeInfluence)
+                originIndex = bar_index - historyOffset
+
+                if not na(pivotHigh)
+                    array.push(liquidityPrices, pivotHigh + atrValue * normVol * liquidityOffsetAtr)
+                    array.push(liquidityScores, math.max(0.1, baseScore * sellSideWeight))
+                    array.push(liquidityIsLower, false)
+                    array.push(liquidityOrigins, originIndex)
+
+                if not na(pivotLow)
+                    array.push(liquidityPrices, pivotLow - atrValue * normVol * liquidityOffsetAtr)
+                    array.push(liquidityScores, math.max(0.1, baseScore * buySideWeight))
+                    array.push(liquidityIsLower, true)
+                    array.push(liquidityOrigins, originIndex)
+
+            if array.size(liquidityPrices) > 0
+                usedLiquiditySource := true
+
+                for levelIndex = 0 to array.size(liquidityPrices) - 1
+                    levelPrice = array.get(liquidityPrices, levelIndex)
+                    levelScore = array.get(liquidityScores, levelIndex)
+                    isLowerLiquidity = array.get(liquidityIsLower, levelIndex)
+
+                    if levelPrice >= windowLow and levelPrice <= windowHigh
+                        binIndex = int(math.floor((levelPrice - windowLow) / binSize))
+                        binIndex := math.max(0, math.min(profileBins - 1, binIndex))
+
+                        if isLowerLiquidity
+                            currentBuy = array.get(buyScores, binIndex)
+                            array.set(buyScores, binIndex, currentBuy + levelScore)
+                        else
+                            currentSell = array.get(sellScores, binIndex)
+                            array.set(sellScores, binIndex, currentSell + levelScore)
+
+        if not usedLiquiditySource
+            // Fallback keeps the profile populated when no active liquidity levels remain.
+            for offset = firstOffset to lastOffset
+                barLow = low[offset]
+                barHigh = high[offset]
+                barOpen = open[offset]
+                barClose = close[offset]
+                barRange = math.max(barHigh - barLow, binSize)
+                normVol = avgVolume == 0 ? 1.0 : nz(volume[offset], avgVolume) / avgVolume
+                bodyScore = math.abs(barClose - barOpen) / barRange
+
+                startBin = int(math.floor((barLow - windowLow) / binSize))
+                endBin = int(math.floor((barHigh - windowLow) / binSize))
+                startBin := math.max(0, math.min(profileBins - 1, startBin))
+                endBin := math.max(0, math.min(profileBins - 1, endBin))
+
+                for binIndex = startBin to endBin
+                    binMid = windowLow + (binIndex + 0.5) * binSize
+                    distanceScore = 1.0 - math.min(1.0, math.abs(binMid - barClose) / barRange)
+                    reactionScore = 1.0 + distanceScore * 0.65 + bodyScore * bodyInfluence + (normVol - 1.0) * volumeInfluence
+                    weightedScore = math.max(0.1, reactionScore)
+                    isBuyZone = binMid <= barClose
+
+                    if isBuyZone
+                        currentBuy = array.get(buyScores, binIndex)
+                        array.set(buyScores, binIndex, currentBuy + weightedScore * buySideWeight)
+                    else
+                        currentSell = array.get(sellScores, binIndex)
+                        array.set(sellScores, binIndex, currentSell + weightedScore * sellSideWeight)
+
+        smoothedBuyScores = array.new_float(profileBins, 0.0)
+        smoothedSellScores = array.new_float(profileBins, 0.0)
+        float maxScore = 0.0
+        int pocIndex = 0
+
+        for binIndex = 0 to profileBins - 1
+            buyRaw = array.get(buyScores, binIndex)
+            buyPrev = binIndex > 0 ? array.get(buyScores, binIndex - 1) : buyRaw
+            buyNext = binIndex < profileBins - 1 ? array.get(buyScores, binIndex + 1) : buyRaw
+            buySmooth = smoothBands ? buyPrev * 0.2 + buyRaw * 0.6 + buyNext * 0.2 : buyRaw
+
+            sellRaw = array.get(sellScores, binIndex)
+            sellPrev = binIndex > 0 ? array.get(sellScores, binIndex - 1) : sellRaw
+            sellNext = binIndex < profileBins - 1 ? array.get(sellScores, binIndex + 1) : sellRaw
+            sellSmooth = smoothBands ? sellPrev * 0.2 + sellRaw * 0.6 + sellNext * 0.2 : sellRaw
+
+            array.set(smoothedBuyScores, binIndex, buySmooth)
+            array.set(smoothedSellScores, binIndex, sellSmooth)
+
+            totalScore = buySmooth + sellSmooth
+            if totalScore > maxScore
+                maxScore := totalScore
+                pocIndex := binIndex
+
+        heatmapLeft = bar_index - profileBars + 1
+        heatmapRight = bar_index - rightPaddingBars
+
+        for binIndex = 0 to profileBins - 1
+            buyScore = array.get(smoothedBuyScores, binIndex)
+            sellScore = array.get(smoothedSellScores, binIndex)
+            totalScore = buyScore + sellScore
+
+            if totalScore > 0
+                strength = maxScore == 0 ? 0.0 : totalScore / maxScore
+                bandTop = windowLow + (binIndex + 1.0) * binSize
+                bandBottom = windowLow + binIndex * binSize
+                frameColor = f_profile_color(buyScore, sellScore, strength, baseTransparency, buyColor, sellColor)
+                fillColor = f_frame_fill_color(buyScore, sellScore, strength, frameFillTransparency, buyColor, sellColor)
+                borderColor = binIndex == pocIndex and showPoc ? color.new(pocColor, 10) : frameColor
+                borderWidth = binIndex == pocIndex and showPoc ? 2 : 2
+                heatBox = box.new(left=heatmapLeft, top=bandTop, right=heatmapRight, bottom=bandBottom, xloc=xloc.bar_index, border_color=borderColor, border_width=borderWidth, bgcolor=fillColor)
+                array.push(heatBoxes, heatBox)
+
+        if showLiquidityLines and usedLiquiditySource and array.size(liquidityPrices) > 0
+            for levelIndex = 0 to array.size(liquidityPrices) - 1
+                levelPrice = array.get(liquidityPrices, levelIndex)
+                levelScore = array.get(liquidityScores, levelIndex)
+                isLowerLiquidity = array.get(liquidityIsLower, levelIndex)
+                originIndex = array.get(liquidityOrigins, levelIndex)
+
+                if levelPrice >= windowLow and levelPrice <= windowHigh
+                    strength = maxScore == 0 ? 0.0 : levelScore / maxScore
+                    lineColor = color.new(isLowerLiquidity ? buyColor : sellColor, f_strength_transparency(strength, baseTransparency + 8))
+                    lineRight = heatmapSource == "Liquidity" ? heatmapRight : bar_index
+                    liquidityLine = line.new(x1=originIndex, y1=levelPrice, x2=lineRight, y2=levelPrice, xloc=xloc.bar_index, extend=extend.none, color=lineColor, width=f_line_width(levelScore, maxScore))
+                    array.push(liquidityLines, liquidityLine)
+
+        if showPoc and maxScore > 0
+            pocPrice = windowLow + (pocIndex + 0.5) * binSize
+            pocLine := line.new(x1=heatmapLeft, y1=pocPrice, x2=heatmapRight, y2=pocPrice, xloc=xloc.bar_index, extend=extend.none, color=color.new(pocColor, 0), style=line.style_dashed, width=2)
+
+            if showPeakMarker
+                markerLeft = rightPaddingBars > 0 ? heatmapRight + 1 : heatmapRight - 1
+                markerRight = rightPaddingBars > 0 ? heatmapRight + 2 : heatmapRight
+                markerHalfHeight = math.max(binSize * 0.22, syminfo.mintick * 3)
+                peakMarker := box.new(left=markerLeft, top=pocPrice + markerHalfHeight, right=markerRight, bottom=pocPrice - markerHalfHeight, xloc=xloc.bar_index, border_color=color.new(pocColor, 0), border_width=2, bgcolor=color.new(pocColor, 0))
