@@ -129,6 +129,7 @@ if barstate.islast
         buyScores = array.new_float(profileBins, 0.0)
         sellScores = array.new_float(profileBins, 0.0)
         usedLiquiditySource = false
+        visibleLiquidityLevels = 0
 
         liquidityPrices = array.new_float()
         liquidityScores = array.new_float()
@@ -190,14 +191,13 @@ if barstate.islast
                     array.push(liquidityOrigins, originIndex)
 
             if array.size(liquidityPrices) > 0
-                usedLiquiditySource := true
-
                 for levelIndex = 0 to array.size(liquidityPrices) - 1
                     levelPrice = array.get(liquidityPrices, levelIndex)
                     levelScore = array.get(liquidityScores, levelIndex)
                     isLowerLiquidity = array.get(liquidityIsLower, levelIndex)
 
                     if levelPrice >= windowLow and levelPrice <= windowHigh
+                        visibleLiquidityLevels += 1
                         binIndex = int(math.floor((levelPrice - windowLow) / binSize))
                         binIndex := math.max(0, math.min(profileBins - 1, binIndex))
 
@@ -207,6 +207,8 @@ if barstate.islast
                         else
                             currentSell = array.get(sellScores, binIndex)
                             array.set(sellScores, binIndex, currentSell + levelScore)
+
+            usedLiquiditySource := visibleLiquidityLevels > 0
 
         if not usedLiquiditySource
             // Fallback keeps the profile populated when no active liquidity levels remain.
@@ -277,7 +279,7 @@ if barstate.islast
                 frameColor = f_profile_color(buyScore, sellScore, strength, baseTransparency, buyColor, sellColor)
                 fillColor = f_frame_fill_color(buyScore, sellScore, strength, frameFillTransparency, buyColor, sellColor)
                 borderColor = binIndex == pocIndex and showPoc ? color.new(pocColor, 10) : frameColor
-                borderWidth = binIndex == pocIndex and showPoc ? 2 : 2
+                borderWidth = binIndex == pocIndex and showPoc ? 2 : 1
                 heatBox = box.new(left=heatmapLeft, top=bandTop, right=heatmapRight, bottom=bandBottom, xloc=xloc.bar_index, border_color=borderColor, border_width=borderWidth, bgcolor=fillColor)
                 array.push(heatBoxes, heatBox)
 
