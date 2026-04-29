@@ -78,6 +78,20 @@ grp_vol = "Volume Filter"
 use_vol_filter = input.bool(false, "Require Above-Average Volume", group=grp_vol)
 vol_ma_len     = input.int(20, "Volume MA Length", minval=1, group=grp_vol)
 
+// ── Bollinger Bands ────────────────────────────────────────────────────────────
+grp_bb          = "Bollinger Bands"
+show_bb         = input.bool(true,  "Show Bollinger Bands",   group=grp_bb)
+bb_len          = input.int(20,     "BB Length",              minval=1, group=grp_bb)
+bb_mult         = input.float(2.0,  "BB Multiplier",          minval=0.1, step=0.1, group=grp_bb)
+bb_src          = input.source(close, "BB Source",            group=grp_bb)
+show_bb_fill    = input.bool(true,  "Show Band Fill",         group=grp_bb)
+bb_fill_transp  = input.int(90,     "Fill Transparency",      minval=50, maxval=99, group=grp_bb)
+show_bb_squeeze = input.bool(true,  "Highlight BB Squeeze",   group=grp_bb,
+     tooltip="Highlights bars where bands are compressed — a potential breakout setup.")
+bb_squeeze_pct  = input.float(0.75, "Squeeze Threshold (×avg width)", minval=0.1, maxval=1.0, step=0.05, group=grp_bb)
+use_bb_signal   = input.bool(false, "Use BB Signal Filter",   group=grp_bb,
+     tooltip="When on, BUY requires price above lower band; SELL requires price below upper band.")
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SECTION 2 ▸ CORE CALCULATIONS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -110,6 +124,16 @@ stoch_d       = ta.sma(stoch_k, stoch_d_smooth)
 vol_ma = ta.sma(volume, vol_ma_len)
 vol_ok = not use_vol_filter or volume > vol_ma
 
+// ── Bollinger Bands ────────────────────────────────────────────────────────────
+[bb_upper, bb_basis, bb_lower] = ta.bb(bb_src, bb_len, bb_mult)
+bb_width     = bb_upper - bb_lower
+bb_width_avg = ta.sma(bb_width, bb_len)
+bb_squeeze   = bb_width < bb_width_avg * bb_squeeze_pct
+
+// Optional BB signal filter: buy above lower band, sell below upper band
+bb_buy_ok  = not use_bb_signal or close > bb_lower
+bb_sell_ok = not use_bb_signal or close < bb_upper
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SECTION 3 ▸ SIGNAL LOGIC
 // ─────────────────────────────────────────────────────────────────────────────
@@ -119,14 +143,14 @@ buy_cond2 = rsi > rsi_mid and rsi < rsi_ob
 buy_cond3 = ta.crossover(macd_line, signal_line)
 buy_cond4 = ta.crossover(stoch_k, stoch_d) and stoch_k < stoch_ob
 
-buy_signal = buy_cond1 and buy_cond2 and buy_cond3 and buy_cond4 and vol_ok
+buy_signal = buy_cond1 and buy_cond2 and buy_cond3 and buy_cond4 and vol_ok and bb_buy_ok
 
 sell_cond1 = close < ema_fast and close < ema_mid and close < ema_slow
 sell_cond2 = rsi < rsi_mid and rsi > rsi_os
 sell_cond3 = ta.crossunder(macd_line, signal_line)
 sell_cond4 = ta.crossunder(stoch_k, stoch_d) and stoch_k > stoch_os
 
-sell_signal = sell_cond1 and sell_cond2 and sell_cond3 and sell_cond4 and vol_ok
+sell_signal = sell_cond1 and sell_cond2 and sell_cond3 and sell_cond4 and vol_ok and bb_sell_ok
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SECTION 4 ▸ DAILY PIVOT POINTS
@@ -169,6 +193,28 @@ p_mid  = plot(show_emas ? ema_mid  : na, display=display.none)
 fill(p_fast, p_mid,
      color = bull_trend ? color.new(color.teal, 85) : bear_trend ? color.new(color.red, 85) : color.new(color.gray, 90),
      title = "EMA Ribbon")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 7b ▸ BOLLINGER BANDS PLOTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Upper band — Red (resistance / overbought zone)
+bb_upper_p = plot(show_bb ? bb_upper : na, "BB Upper", color=color.new(color.red,    0), linewidth=1)
+// Middle band — Yellow (basis / mean)
+bb_mid_p   = plot(show_bb ? bb_basis : na, "BB Mid",   color=color.new(color.yellow, 0), linewidth=1)
+// Lower band — Green (support / oversold zone)
+bb_lower_p = plot(show_bb ? bb_lower : na, "BB Lower", color=color.new(color.green,  0), linewidth=1)
+
+// Semi-transparent fill between upper and lower bands (red above basis, green below)
+fill(bb_upper_p, bb_mid_p,
+     color = show_bb and show_bb_fill ? color.new(color.red,   bb_fill_transp) : na,
+     title = "BB Upper Fill")
+fill(bb_mid_p, bb_lower_p,
+     color = show_bb and show_bb_fill ? color.new(color.green, bb_fill_transp) : na,
+     title = "BB Lower Fill")
+
+// Background highlight when bands are squeezed (potential volatility breakout setup)
+bgcolor(show_bb and show_bb_squeeze and bb_squeeze ? color.new(color.purple, 92) : na, title="BB Squeeze Highlight")
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SECTION 8 ▸ DAILY PIVOT PLOTS
