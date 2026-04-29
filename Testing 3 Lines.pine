@@ -1,0 +1,333 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0
+// © neXQan
+//@version=6
+indicator(title="Line Testing 3", shorttitle="neXQan Lines", overlay=true, max_lines_count=500, max_labels_count=200)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 1 ▸ USER INPUTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── EMA Settings ──────────────────────────────────────────────────────────────
+grp_ema = "EMA Lines"
+ema_fast_len  = input.int(21,  "Fast EMA",   minval=1, group=grp_ema)
+ema_mid_len   = input.int(50,  "Mid EMA",    minval=1, group=grp_ema)
+ema_slow_len  = input.int(200, "Slow EMA",   minval=1, group=grp_ema)
+show_emas     = input.bool(true, "Show EMAs", group=grp_ema)
+
+// ── Pivot / Support-Resistance Lines ─────────────────────────────────────────
+grp_sr = "Support & Resistance Lines"
+show_sr       = input.bool(true, "Show S/R Lines",    group=grp_sr)
+pivot_left    = input.int(10,    "Pivot Left Bars",   minval=1, maxval=50, group=grp_sr)
+pivot_right   = input.int(10,    "Pivot Right Bars",  minval=1, maxval=50, group=grp_sr)
+sr_extend     = input.int(80,    "Line Extend (bars)", minval=5, maxval=300, group=grp_sr)
+show_labels   = input.bool(true, "Show Level Labels", group=grp_sr)
+res_color     = input.color(color.rgb(239, 83, 80),   "Resistance Color", group=grp_sr)
+sup_color     = input.color(color.rgb(38, 166, 154),  "Support Color",    group=grp_sr)
+sr_linewidth  = input.int(1, "S/R Line Width", minval=1, maxval=4, group=grp_sr)
+
+// ── Daily Pivot Lines ─────────────────────────────────────────────────────────
+grp_pp = "Daily Pivot Lines"
+show_pivots   = input.bool(true, "Show Daily Pivots", group=grp_pp)
+piv_color     = input.color(color.rgb(255, 255, 255), "Pivot Color",      group=grp_pp)
+r1_color      = input.color(color.rgb(76, 175, 80),   "R1/R2/R3 Color",   group=grp_pp)
+s1_color      = input.color(color.rgb(244, 67, 54),   "S1/S2/S3 Color",   group=grp_pp)
+
+// ── Trend Line ────────────────────────────────────────────────────────────────
+grp_tl = "Dynamic Trend Line"
+show_trendline = input.bool(true,  "Show Trend Line",  group=grp_tl)
+tl_lookback    = input.int(30,     "Lookback Bars",    minval=5, maxval=200, group=grp_tl)
+bull_tl_color  = input.color(color.rgb(0, 230, 118),  "Bullish TL Color", group=grp_tl)
+bear_tl_color  = input.color(color.rgb(255, 82, 82),  "Bearish TL Color", group=grp_tl)
+tl_width       = input.int(2, "Trend Line Width", minval=1, maxval=4, group=grp_tl)
+
+// ── Signal Settings ───────────────────────────────────────────────────────────
+grp_sig = "Signal Lines"
+show_signals  = input.bool(true,  "Show Buy/Sell Signals", group=grp_sig)
+show_sl_tp    = input.bool(true,  "Show SL / TP Lines",    group=grp_sig)
+
+// ── RSI ───────────────────────────────────────────────────────────────────────
+grp_rsi = "RSI Filter"
+rsi_len  = input.int(14, "RSI Length", minval=2, group=grp_rsi)
+rsi_ob   = input.int(70, "Overbought", minval=50, group=grp_rsi)
+rsi_os   = input.int(30, "Oversold",   maxval=50, group=grp_rsi)
+rsi_mid  = input.int(50, "Mid Level",  group=grp_rsi)
+
+// ── ATR / Risk ────────────────────────────────────────────────────────────────
+grp_atr = "ATR Risk Management"
+atr_len      = input.int(14,  "ATR Length",    minval=1,   group=grp_atr)
+sl_atr_mult  = input.float(1.5, "SL ATR ×",   minval=0.1, step=0.1, group=grp_atr)
+tp1_atr_mult = input.float(1.5, "TP1 ATR ×",  minval=0.1, step=0.1, group=grp_atr)
+tp2_atr_mult = input.float(3.0, "TP2 ATR ×",  minval=0.1, step=0.1, group=grp_atr)
+
+// ── MACD ─────────────────────────────────────────────────────────────────────
+grp_macd = "MACD Confirmation"
+macd_fast   = input.int(12, "MACD Fast",   minval=1, group=grp_macd)
+macd_slow   = input.int(26, "MACD Slow",   minval=1, group=grp_macd)
+macd_signal = input.int(9,  "MACD Signal", minval=1, group=grp_macd)
+
+// ── Stochastic RSI ────────────────────────────────────────────────────────────
+grp_stoch = "Stochastic RSI"
+stoch_rsi_len  = input.int(14, "Stoch RSI Length", minval=2, group=grp_stoch)
+stoch_k_smooth = input.int(3,  "K Smooth",          minval=1, group=grp_stoch)
+stoch_d_smooth = input.int(3,  "D Smooth",          minval=1, group=grp_stoch)
+stoch_ob       = input.int(80, "Stoch Overbought",  minval=50, group=grp_stoch)
+stoch_os       = input.int(20, "Stoch Oversold",    maxval=50, group=grp_stoch)
+
+// ── Volume Filter ─────────────────────────────────────────────────────────────
+grp_vol = "Volume Filter"
+use_vol_filter = input.bool(false, "Require Above-Average Volume", group=grp_vol)
+vol_ma_len     = input.int(20, "Volume MA Length", minval=1, group=grp_vol)
+
+// ── Bollinger Bands ────────────────────────────────────────────────────────────
+grp_bb          = "Bollinger Bands"
+show_bb         = input.bool(true,  "Show Bollinger Bands",   group=grp_bb)
+bb_len          = input.int(20,     "BB Length",              minval=1, group=grp_bb)
+bb_mult         = input.float(2.0,  "BB Multiplier",          minval=0.1, step=0.1, group=grp_bb)
+bb_src          = input.source(close, "BB Source",            group=grp_bb)
+show_bb_fill    = input.bool(true,  "Show Band Fill",         group=grp_bb)
+bb_fill_transp  = input.int(90,     "Fill Transparency",      minval=50, maxval=99, group=grp_bb)
+show_bb_squeeze = input.bool(true,  "Highlight BB Squeeze",   group=grp_bb,
+     tooltip="Highlights bars where bands are compressed — a potential breakout setup.")
+bb_squeeze_pct  = input.float(0.75, "Squeeze Threshold (×avg width)", minval=0.1, maxval=1.0, step=0.05, group=grp_bb)
+use_bb_signal   = input.bool(false, "Use BB Signal Filter",   group=grp_bb,
+     tooltip="When on, BUY requires price above lower band; SELL requires price below upper band.")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 2 ▸ CORE CALCULATIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── EMAs ──────────────────────────────────────────────────────────────────────
+ema_fast  = ta.ema(close, ema_fast_len)
+ema_mid   = ta.ema(close, ema_mid_len)
+ema_slow  = ta.ema(close, ema_slow_len)
+
+// ── Trend state ───────────────────────────────────────────────────────────────
+bull_trend = ema_fast > ema_mid and ema_mid > ema_slow
+bear_trend = ema_fast < ema_mid and ema_mid < ema_slow
+
+// ── RSI ───────────────────────────────────────────────────────────────────────
+rsi = ta.rsi(close, rsi_len)
+
+// ── MACD ──────────────────────────────────────────────────────────────────────
+[macd_line, signal_line, ] = ta.macd(close, macd_fast, macd_slow, macd_signal)
+
+// ── ATR ───────────────────────────────────────────────────────────────────────
+atr = ta.atr(atr_len)
+
+// ── Stochastic RSI ────────────────────────────────────────────────────────────
+rsi_for_stoch = ta.rsi(close, stoch_rsi_len)
+stoch_k_raw   = ta.stoch(rsi_for_stoch, rsi_for_stoch, rsi_for_stoch, stoch_rsi_len)
+stoch_k       = ta.sma(stoch_k_raw, stoch_k_smooth)
+stoch_d       = ta.sma(stoch_k, stoch_d_smooth)
+
+// ── Volume ────────────────────────────────────────────────────────────────────
+vol_ma = ta.sma(volume, vol_ma_len)
+vol_ok = not use_vol_filter or volume > vol_ma
+
+// ── Bollinger Bands ────────────────────────────────────────────────────────────
+[bb_upper, bb_basis, bb_lower] = ta.bb(bb_src, bb_len, bb_mult)
+bb_width     = bb_upper - bb_lower
+bb_width_avg = ta.sma(bb_width, bb_len)
+bb_squeeze   = bb_width < bb_width_avg * bb_squeeze_pct
+
+// Optional BB signal filter: buy above lower band, sell below upper band
+bb_buy_ok  = not use_bb_signal or close > bb_lower
+bb_sell_ok = not use_bb_signal or close < bb_upper
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 3 ▸ SIGNAL LOGIC
+// ─────────────────────────────────────────────────────────────────────────────
+
+buy_cond1 = close > ema_fast and close > ema_mid and close > ema_slow
+buy_cond2 = rsi > rsi_mid and rsi < rsi_ob
+buy_cond3 = ta.crossover(macd_line, signal_line)
+buy_cond4 = ta.crossover(stoch_k, stoch_d) and stoch_k < stoch_ob
+
+buy_signal = buy_cond1 and buy_cond2 and buy_cond3 and buy_cond4 and vol_ok and bb_buy_ok
+
+sell_cond1 = close < ema_fast and close < ema_mid and close < ema_slow
+sell_cond2 = rsi < rsi_mid and rsi > rsi_os
+sell_cond3 = ta.crossunder(macd_line, signal_line)
+sell_cond4 = ta.crossunder(stoch_k, stoch_d) and stoch_k > stoch_os
+
+sell_signal = sell_cond1 and sell_cond2 and sell_cond3 and sell_cond4 and vol_ok and bb_sell_ok
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 4 ▸ DAILY PIVOT POINTS
+// ─────────────────────────────────────────────────────────────────────────────
+prev_high  = request.security(syminfo.tickerid, "D", high[1],  lookahead=barmerge.lookahead_on)
+prev_low   = request.security(syminfo.tickerid, "D", low[1],   lookahead=barmerge.lookahead_on)
+prev_close = request.security(syminfo.tickerid, "D", close[1], lookahead=barmerge.lookahead_on)
+
+pivot  = (prev_high + prev_low + prev_close) / 3
+pp_r1  = 2 * pivot - prev_low
+pp_s1  = 2 * pivot - prev_high
+pp_r2  = pivot + (prev_high - prev_low)
+pp_s2  = pivot - (prev_high - prev_low)
+pp_r3  = prev_high + 2 * (pivot - prev_low)
+pp_s3  = prev_low  - 2 * (prev_high - pivot)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 5 ▸ PIVOT HIGH / LOW DETECTION FOR S/R LINES
+// ─────────────────────────────────────────────────────────────────────────────
+ph = ta.pivothigh(high, pivot_left, pivot_right)
+pl = ta.pivotlow(low,   pivot_left, pivot_right)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 6 ▸ DYNAMIC TREND LINE (regression slope)
+// ─────────────────────────────────────────────────────────────────────────────
+tl_slope = (close - close[tl_lookback]) / tl_lookback
+tl_start_price = close[tl_lookback]
+tl_end_price   = close
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 7 ▸ EMA PLOTS (standard plot lines)
+// ─────────────────────────────────────────────────────────────────────────────
+plot(show_emas ? ema_fast : na, "EMA 21",  color=color.new(color.yellow, 0), linewidth=1)
+plot(show_emas ? ema_mid  : na, "EMA 50",  color=color.new(color.orange, 0), linewidth=2)
+plot(show_emas ? ema_slow : na, "EMA 200", color=color.new(color.red,    0), linewidth=2)
+
+// EMA ribbon fill
+p_fast = plot(show_emas ? ema_fast : na, display=display.none)
+p_mid  = plot(show_emas ? ema_mid  : na, display=display.none)
+fill(p_fast, p_mid,
+     color = bull_trend ? color.new(color.teal, 85) : bear_trend ? color.new(color.red, 85) : color.new(color.gray, 90),
+     title = "EMA Ribbon")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 7b ▸ BOLLINGER BANDS PLOTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Upper band — Red (resistance / overbought zone)
+bb_upper_p = plot(show_bb ? bb_upper : na, "BB Upper", color=color.new(color.red,    0), linewidth=1)
+// Middle band — Yellow (basis / mean)
+bb_mid_p   = plot(show_bb ? bb_basis : na, "BB Mid",   color=color.new(color.yellow, 0), linewidth=1)
+// Lower band — Green (support / oversold zone)
+bb_lower_p = plot(show_bb ? bb_lower : na, "BB Lower", color=color.new(color.green,  0), linewidth=1)
+
+// Semi-transparent fill between upper and lower bands (red above basis, green below)
+fill(bb_upper_p, bb_mid_p,
+     color = show_bb and show_bb_fill ? color.new(color.red,   bb_fill_transp) : na,
+     title = "BB Upper Fill")
+fill(bb_mid_p, bb_lower_p,
+     color = show_bb and show_bb_fill ? color.new(color.green, bb_fill_transp) : na,
+     title = "BB Lower Fill")
+
+// Background highlight when bands are squeezed (potential volatility breakout setup)
+bgcolor(show_bb and show_bb_squeeze and bb_squeeze ? color.new(color.purple, 92) : na, title="BB Squeeze Highlight")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 8 ▸ DAILY PIVOT PLOTS
+// ─────────────────────────────────────────────────────────────────────────────
+plot(show_pivots ? pivot : na, "Pivot", color=color.new(piv_color, 20), linewidth=1, style=plot.style_circles)
+plot(show_pivots ? pp_r1 : na, "R1",   color=color.new(r1_color,  20), linewidth=1, style=plot.style_circles)
+plot(show_pivots ? pp_s1 : na, "S1",   color=color.new(s1_color,  20), linewidth=1, style=plot.style_circles)
+plot(show_pivots ? pp_r2 : na, "R2",   color=color.new(r1_color,  40), linewidth=1, style=plot.style_cross)
+plot(show_pivots ? pp_s2 : na, "S2",   color=color.new(s1_color,  40), linewidth=1, style=plot.style_cross)
+plot(show_pivots ? pp_r3 : na, "R3",   color=color.new(r1_color,  60), linewidth=1, style=plot.style_cross)
+plot(show_pivots ? pp_s3 : na, "S3",   color=color.new(s1_color,  60), linewidth=1, style=plot.style_cross)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 9 ▸ BUY / SELL SIGNAL SHAPES
+// ─────────────────────────────────────────────────────────────────────────────
+plotshape(show_signals and buy_signal,  "BUY",  shape.labelup,   location.belowbar, color.new(color.lime, 0), text="BUY",  textcolor=color.black, size=size.small)
+plotshape(show_signals and sell_signal, "SELL", shape.labeldown, location.abovebar, color.new(color.red,  0), text="SELL", textcolor=color.white, size=size.small)
+barcolor(buy_signal ? color.new(color.lime, 30) : sell_signal ? color.new(color.red, 30) : na)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 10 ▸ LINE DRAWINGS (S/R, Trend, SL/TP)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Support / Resistance lines drawn at each confirmed pivot ──────────────────
+if show_sr
+    if not na(ph)
+        res_line = line.new(bar_index - pivot_right, ph, bar_index - pivot_right + sr_extend, ph,
+             xloc=xloc.bar_index, extend=extend.none,
+             color=res_color, style=line.style_dashed, width=sr_linewidth)
+        if show_labels
+            label.new(bar_index - pivot_right + sr_extend, ph, "R",
+                 style=label.style_label_left, color=res_color,
+                 textcolor=color.white, size=size.tiny)
+
+    if not na(pl)
+        sup_line = line.new(bar_index - pivot_right, pl, bar_index - pivot_right + sr_extend, pl,
+             xloc=xloc.bar_index, extend=extend.none,
+             color=sup_color, style=line.style_dashed, width=sr_linewidth)
+        if show_labels
+            label.new(bar_index - pivot_right + sr_extend, pl, "S",
+                 style=label.style_label_left, color=sup_color,
+                 textcolor=color.white, size=size.tiny)
+
+// ── Dynamic trend line (redrawn each bar, connecting lookback close to current) ─
+var line trendLine = na
+if show_trendline and barstate.islast
+    line.delete(trendLine)
+    tl_col = tl_slope >= 0 ? bull_tl_color : bear_tl_color
+    trendLine := line.new(bar_index - tl_lookback, tl_start_price, bar_index, tl_end_price,
+         xloc=xloc.bar_index, extend=extend.right,
+         color=tl_col, style=line.style_solid, width=tl_width)
+
+// ── SL / TP lines drawn on signal bars ────────────────────────────────────────
+if show_sl_tp and buy_signal
+    sl_price  = close - sl_atr_mult  * atr
+    tp1_price = close + tp1_atr_mult * atr
+    tp2_price = close + tp2_atr_mult * atr
+    line.new(bar_index, sl_price,  bar_index + sr_extend, sl_price,
+         color=color.new(color.red,   0), style=line.style_dotted, width=2)
+    line.new(bar_index, tp1_price, bar_index + sr_extend, tp1_price,
+         color=color.new(color.green, 0), style=line.style_dotted, width=2)
+    line.new(bar_index, tp2_price, bar_index + sr_extend, tp2_price,
+         color=color.new(color.teal,  0), style=line.style_dotted, width=2)
+    label.new(bar_index, sl_price,  "SL",  color=color.red,   textcolor=color.white, style=label.style_label_right, size=size.tiny)
+    label.new(bar_index, tp1_price, "TP1", color=color.green, textcolor=color.white, style=label.style_label_right, size=size.tiny)
+    label.new(bar_index, tp2_price, "TP2", color=color.teal,  textcolor=color.white, style=label.style_label_right, size=size.tiny)
+
+if show_sl_tp and sell_signal
+    sl_price  = close + sl_atr_mult  * atr
+    tp1_price = close - tp1_atr_mult * atr
+    tp2_price = close - tp2_atr_mult * atr
+    line.new(bar_index, sl_price,  bar_index + sr_extend, sl_price,
+         color=color.new(color.red,   0), style=line.style_dotted, width=2)
+    line.new(bar_index, tp1_price, bar_index + sr_extend, tp1_price,
+         color=color.new(color.green, 0), style=line.style_dotted, width=2)
+    line.new(bar_index, tp2_price, bar_index + sr_extend, tp2_price,
+         color=color.new(color.teal,  0), style=line.style_dotted, width=2)
+    label.new(bar_index, sl_price,  "SL",  color=color.red,   textcolor=color.white, style=label.style_label_right, size=size.tiny)
+    label.new(bar_index, tp1_price, "TP1", color=color.green, textcolor=color.white, style=label.style_label_right, size=size.tiny)
+    label.new(bar_index, tp2_price, "TP2", color=color.teal,  textcolor=color.white, style=label.style_label_right, size=size.tiny)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 11 ▸ INFO TABLE
+// ─────────────────────────────────────────────────────────────────────────────
+var table info_table = table.new(position.top_right, 2, 5,
+     bgcolor      = color.new(color.black, 30),
+     border_width = 1,
+     border_color = color.new(color.gray, 40))
+
+if barstate.islast
+    table.cell(info_table, 0, 0, "Line Testing 3",
+         text_color=color.yellow, text_size=size.small,
+         bgcolor=color.new(color.navy, 20), text_halign=text.align_center)
+    table.merge_cells(info_table, 0, 0, 1, 0)
+
+    table.cell(info_table, 0, 1, "Trend",  text_color=color.white,  text_size=size.small)
+    table.cell(info_table, 0, 2, "RSI",    text_color=color.white,  text_size=size.small)
+    table.cell(info_table, 0, 3, "EMA 21", text_color=color.yellow, text_size=size.small)
+    table.cell(info_table, 0, 4, "EMA 50", text_color=color.orange, text_size=size.small)
+
+    trend_txt   = bull_trend ? "BULLISH ▲" : bear_trend ? "BEARISH ▼" : "RANGING ◆"
+    trend_color = bull_trend ? color.lime   : bear_trend ? color.red   : color.gray
+    table.cell(info_table, 1, 1, trend_txt, text_color=trend_color, text_size=size.small)
+
+    rsi_color = rsi >= rsi_ob ? color.red : rsi <= rsi_os ? color.lime : color.white
+    table.cell(info_table, 1, 2, str.tostring(math.round(rsi, 2)), text_color=rsi_color, text_size=size.small)
+
+    table.cell(info_table, 1, 3, str.tostring(math.round(ema_fast, 2)), text_color=color.yellow, text_size=size.small)
+    table.cell(info_table, 1, 4, str.tostring(math.round(ema_mid,  2)), text_color=color.orange, text_size=size.small)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 12 ▸ ALERTS
+// ─────────────────────────────────────────────────────────────────────────────
+alertcondition(buy_signal,  "Line Testing 3 – BUY",  "Line Testing 3: BUY Signal on {{ticker}} @ {{close}}")
+alertcondition(sell_signal, "Line Testing 3 – SELL", "Line Testing 3: SELL Signal on {{ticker}} @ {{close}}")
+alertcondition(buy_signal or sell_signal, "Line Testing 3 – Any Signal", "Line Testing 3: Signal on {{ticker}} @ {{close}}")
