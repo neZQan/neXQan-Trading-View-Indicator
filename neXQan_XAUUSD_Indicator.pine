@@ -1,7 +1,7 @@
 // This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0
 // © neXQan
 //@version=5
-indicator(title="neXQan XAUUSD Gold Indicator", shorttitle="neXQan Gold", overlay=true, max_bars_back=500, max_lines_count=50, max_labels_count=50)
+indicator(title="neXQan XAUUSD Gold Indicator", shorttitle="neXQanGold", overlay=true, max_bars_back=500, max_lines_count=50, max_labels_count=50)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SECTION 1 ▸ USER INPUTS
