@@ -21,37 +21,61 @@ A comprehensive **Pine Script v5** overlay indicator designed specifically for *
 | **Volume Filter** | Optional above-average volume confirmation (off by default, toggle per preference) |
 | **Win-Rate Table** | Live on-chart table showing Overall / Buy / Sell win-rates and total signal count |
 | **Bar Colouring** | Candles are highlighted green on BUY bars and red on SELL bars |
+| **Buy % / Sell %** | Multi-factor 0–100 confidence shown live in the table |
 | **Alerts** | Three built-in alert conditions (BUY / SELL / Any Signal) |
+
+### Scalping Mode (1m – 5m)
+
+The default **Profile = Auto** picks faster EMA / RSI / MACD / Stoch / ATR settings and a signal cooldown from the chart timeframe (1m, 3m, 5m; anything higher uses the 5m set). Choose **Manual** to use your own inputs.
+
+| Profile | EMA (fast/mid/slow) | RSI | MACD | ATR | Cooldown |
+|---|---|---|---|---|---|
+| 1m | 8 / 21 / 55 | 7 | 6-13-5 | 10 | 3 bars |
+| 3m | 9 / 21 / 55 | 9 | 8-17-6 | 12 | 2 bars |
+| 5m | 9 / 21 / 50 | 10 | 8-21-7 | 14 | 2 bars |
+
+Other defaults: Min Confidence 58%, Min ATR 0.015% of price, SL 1.2×ATR, TP1 1.2×ATR, TP2 2.4×ATR, volume filter off. Works on XAUUSD and BTCUSD (if signals are too many/few on BTC, adjust *Min Confidence* and *Min ATR %*).
 
 ### Signal Logic
 
-**BUY** — all of the following must be true simultaneously:
-1. Close above EMA 21, 50 *and* 200 (bullish structure)
-2. RSI between 50 and 70 (trending up, not overbought)
-3. MACD line crosses *above* signal line (momentum confirmation)
-4. Stochastic RSI K crosses *above* D (and K < 80)
+**BUY** fires when all of these are true on a **closed** bar:
+1. Fast EMA > Mid EMA and close > Mid EMA
+2. RSI between 45 and the overbought level (75)
+3. At least one trigger: MACD cross up, Stoch RSI K cross above D (K < 85), or close crossing above the fast EMA
+4. Buy % ≥ Min Confidence, ATR filter passed, cooldown elapsed (and optional volume filter)
 
-**SELL** — mirror conditions:
-1. Close below EMA 21, 50 *and* 200 (bearish structure)
-2. RSI between 30 and 50 (trending down, not oversold)
-3. MACD line crosses *below* signal line (momentum confirmation)
-4. Stochastic RSI K crosses *below* D (and K > 20)
+**SELL** is the mirror image (Sell % ≥ Min Confidence, RSI 25–55, etc.).
+
+Compared with the old slow logic (price above all EMAs **and** MACD cross **and** Stoch cross at once), only one trigger is needed, so signals are noticeably more frequent while the trend, confidence, ATR and cooldown filters limit noise.
+
+### Reading Buy % / Sell %
+
+Shown in the on-chart table (and in the Data Window / status line). Built from three factors, each scored −1…+1, weighted (default 40 / 40 / 20) and mapped to 0–100:
+- **Trend** – EMA stack, price vs slow EMA, fast-EMA slope
+- **Momentum** – RSI, MACD histogram (relative to ATR), Stoch RSI
+- **Volatility / volume** – candle body in ATR units, boosted by relative volume
+
+Buy % + Sell % = 100. **≥ 60%** = clear lean; **45–55%** = no edge, stay out; **≥ 70%** = strong alignment. Values change every bar.
+
+### No-Repaint Notes
+
+Signals require `barstate.isconfirmed` (fire at bar close only), indicators use current/past bars only, and daily pivots use the previous completed day.
 
 ### How to Use
 
-1. Open [TradingView](https://www.tradingview.com) and open any **XAUUSD** chart.
+1. Open [TradingView](https://www.tradingview.com) and open an **XAUUSD** (or BTCUSD) chart on 1m, 3m or 5m.
 2. Click **Pine Script Editor** at the bottom of the page.
 3. Paste the full contents of `neXQan_XAUUSD_Indicator.pine`.
-4. Click **Add to chart**.
-5. Tune the inputs (EMA lengths, ATR multipliers, etc.) to match your preferred timeframe.
+4. Click **Add to chart** and keep Profile = Auto.
+5. More signals: lower *Min Confidence* to 55 or cooldown to 1 (Manual). Fewer/cleaner: raise *Min Confidence* to 65+.
 
 ### Recommended Timeframes
 
 | Timeframe | Style |
 |---|---|
-| M15 / M30 | Scalping |
-| H1 / H4   | Intraday / Swing |
-| D1        | Position trading |
+| M1 / M3 / M5 | Scalping (tuned presets) |
+| M15 / M30 | Fast intraday (uses 5m preset; consider Manual) |
+| H1 / H4   | Intraday / Swing (use Manual with slower lengths) |
 
 ### Risk Disclaimer
 

@@ -1,68 +1,108 @@
 // This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0
 // © neXQan
 //@version=5
-indicator(title="neXQan XAUUSD Gold Indicator", shorttitle="neXQan Gold", overlay=true, max_bars_back=500, max_lines_count=50, max_labels_count=50)
+indicator(title="neXQan XAUUSD Gold Indicator", shorttitle="neXQan Gold", overlay=true, max_bars_back=500, max_lines_count=50, max_labels_count=500)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// USAGE NOTES (scalping 1m–5m, XAUUSD / BTCUSD)
+//  • Profile "Auto" picks fast settings from the chart timeframe (1m / 3m / 5m).
+//  • Buy % / Sell % = 0–100 confidence from trend + momentum + volatility/volume.
+//    They always add up to 100. >= 60 leans in that direction, 45–55 = no edge.
+//  • Signals fire only on a CLOSED bar (no repaint) and are spaced by a cooldown.
+//  • More signals: lower "Min Confidence" (55) / cooldown (1). Fewer: raise to 65+.
+// ─────────────────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SECTION 1 ▸ USER INPUTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ── EMA Settings ──────────────────────────────────────────────────────────────
-grp_ema = "EMA Trend Filter"
-ema_fast_len  = input.int(21,  "Fast EMA",   minval=1, group=grp_ema)
-ema_mid_len   = input.int(50,  "Mid EMA",    minval=1, group=grp_ema)
-ema_slow_len  = input.int(200, "Slow EMA",   minval=1, group=grp_ema)
-show_emas     = input.bool(true, "Show EMAs", group=grp_ema)
+// ── Profile ───────────────────────────────────────────────────────────────────
+grp_prof = "Scalping Profile"
+profile = input.string("Auto", "Profile", options=["Auto", "1m", "3m", "5m", "Manual"], group=grp_prof,
+     tooltip="Auto = choose 1m/3m/5m tuning from the chart timeframe (anything above 5m uses 5m). Manual = use the values in the groups below.")
+
+// ── EMA Settings (Manual profile) ─────────────────────────────────────────────
+grp_ema = "EMA Trend Filter (Manual profile)"
+ema_fast_in  = input.int(9,  "Fast EMA", minval=1, group=grp_ema)
+ema_mid_in   = input.int(21, "Mid EMA",  minval=1, group=grp_ema)
+ema_slow_in  = input.int(55, "Slow EMA", minval=1, group=grp_ema)
+show_emas    = input.bool(true, "Show EMAs", group=grp_ema)
 
 // ── RSI Settings ──────────────────────────────────────────────────────────────
 grp_rsi = "RSI Filter"
-rsi_len        = input.int(14, "RSI Length",       minval=2,  group=grp_rsi)
-rsi_ob         = input.int(70, "Overbought Level", minval=50, group=grp_rsi)
-rsi_os         = input.int(30, "Oversold Level",   maxval=50, group=grp_rsi)
-rsi_mid        = input.int(50, "Mid Level",        group=grp_rsi)
+rsi_len_in   = input.int(9,  "RSI Length (Manual)", minval=2, group=grp_rsi)
+rsi_ob       = input.int(75, "Overbought Level (no BUY above)", minval=50, group=grp_rsi)
+rsi_os       = input.int(25, "Oversold Level (no SELL below)",  maxval=50, group=grp_rsi)
 
-// ── MACD Settings ─────────────────────────────────────────────────────────────
-grp_macd = "MACD Confirmation"
-macd_fast   = input.int(12, "MACD Fast",   minval=1, group=grp_macd)
-macd_slow   = input.int(26, "MACD Slow",   minval=1, group=grp_macd)
-macd_signal = input.int(9,  "MACD Signal", minval=1, group=grp_macd)
+// ── MACD Settings (Manual profile) ────────────────────────────────────────────
+grp_macd = "MACD Confirmation (Manual profile)"
+macd_fast_in   = input.int(8,  "MACD Fast",   minval=1, group=grp_macd)
+macd_slow_in   = input.int(17, "MACD Slow",   minval=1, group=grp_macd)
+macd_signal_in = input.int(6,  "MACD Signal", minval=1, group=grp_macd)
 
 // ── ATR / Risk Management ─────────────────────────────────────────────────────
 grp_atr = "ATR Risk Management"
-atr_len        = input.int(14,  "ATR Length",       minval=1,   group=grp_atr)
-sl_atr_mult    = input.float(1.5, "Stop-Loss ATR ×",  minval=0.1, step=0.1, group=grp_atr)
-tp1_atr_mult   = input.float(1.5, "TP 1 ATR ×",       minval=0.1, step=0.1, group=grp_atr)
-tp2_atr_mult   = input.float(3.0, "TP 2 ATR ×",       minval=0.1, step=0.1, group=grp_atr)
-show_sl_tp     = input.bool(true, "Show SL / TP Lines", group=grp_atr)
+atr_len_in      = input.int(10,  "ATR Length (Manual)", minval=1, group=grp_atr)
+sl_atr_mult     = input.float(1.2, "Stop-Loss ATR ×", minval=0.1, step=0.1, group=grp_atr)
+tp1_atr_mult    = input.float(1.2, "TP 1 ATR ×",      minval=0.1, step=0.1, group=grp_atr)
+tp2_atr_mult    = input.float(2.4, "TP 2 ATR ×",      minval=0.1, step=0.1, group=grp_atr)
+show_sl_tp      = input.bool(true, "Show SL / TP Labels", group=grp_atr)
 
 // ── Stochastic RSI ────────────────────────────────────────────────────────────
 grp_stoch = "Stochastic RSI"
-stoch_rsi_len  = input.int(14, "Stoch RSI Length",  minval=2, group=grp_stoch)
-stoch_k_smooth = input.int(3,  "K Smooth",          minval=1, group=grp_stoch)
-stoch_d_smooth = input.int(3,  "D Smooth",          minval=1, group=grp_stoch)
-stoch_ob       = input.int(80, "Stoch Overbought",  minval=50, group=grp_stoch)
-stoch_os       = input.int(20, "Stoch Oversold",    maxval=50, group=grp_stoch)
+stoch_len_in    = input.int(10, "Stoch RSI Length (Manual)", minval=2, group=grp_stoch)
+stoch_k_smooth  = input.int(3,  "K Smooth", minval=1, group=grp_stoch)
+stoch_d_smooth  = input.int(3,  "D Smooth", minval=1, group=grp_stoch)
+stoch_ob        = input.int(85, "Stoch Overbought (no BUY trigger above)", minval=50, group=grp_stoch)
+stoch_os        = input.int(15, "Stoch Oversold (no SELL trigger below)",  maxval=50, group=grp_stoch)
+
+// ── Signal Filters ────────────────────────────────────────────────────────────
+grp_flt = "Signal Filters (frequency vs noise)"
+min_conf       = input.int(58, "Min Confidence % to fire", minval=50, maxval=95, group=grp_flt,
+     tooltip="Signal needs Buy % (or Sell %) at least this high. Lower = more signals.")
+cooldown_bars  = input.int(2,  "Cooldown Bars (Manual)", minval=0, maxval=50, group=grp_flt,
+     tooltip="Minimum bars between two signals. Used by Manual profile; presets use their own value.")
+min_atr_pct    = input.float(0.015, "Min ATR % of price", minval=0.0, step=0.005, group=grp_flt,
+     tooltip="Skips dead/flat markets where ATR is smaller than this percent of price.")
+use_vol_filter = input.bool(false, "Require Above-Average Volume", group=grp_flt,
+     tooltip="When enabled, signals only fire on bars where volume exceeds its moving average.")
+vol_ma_len     = input.int(20, "Volume MA Length", minval=1, group=grp_flt)
+
+// ── Confidence Weights ────────────────────────────────────────────────────────
+grp_conf = "Buy % / Sell % Weights"
+w_trend = input.float(40, "Trend weight",             minval=0, group=grp_conf)
+w_mom   = input.float(40, "Momentum weight",          minval=0, group=grp_conf)
+w_flow  = input.float(20, "Volatility/Volume weight", minval=0, group=grp_conf)
 
 // ── Pivot Points ──────────────────────────────────────────────────────────────
 grp_pp = "Pivot Points"
-show_pivots    = input.bool(true, "Show Daily Pivots", group=grp_pp)
-
-// ── Volume Filter ─────────────────────────────────────────────────────────────
-grp_vol = "Volume Filter"
-use_vol_filter = input.bool(false, "Require Above-Average Volume", group=grp_vol,
-     tooltip="When enabled, signals only fire on bars where volume exceeds the 20-bar average.")
-vol_ma_len     = input.int(20, "Volume MA Length", minval=1, group=grp_vol)
+show_pivots = input.bool(true, "Show Daily Pivots", group=grp_pp)
 
 // ── Signal Display ────────────────────────────────────────────────────────────
 grp_sig = "Signal Display"
-show_signals   = input.bool(true,  "Show Buy / Sell Arrows", group=grp_sig)
-show_win_table = input.bool(true,  "Show Win-Rate Table",    group=grp_sig)
-eval_bars      = input.int(10,     "Win-Rate Eval Bars",  minval=5, maxval=50, group=grp_sig,
+show_signals   = input.bool(true, "Show Buy / Sell Arrows", group=grp_sig)
+show_win_table = input.bool(true, "Show Stats / Confidence Table", group=grp_sig)
+eval_bars      = input.int(8, "Win-Rate Eval Bars", minval=5, maxval=50, group=grp_sig,
      tooltip="How many bars after a signal to evaluate TP/SL outcome for win-rate statistics.")
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SECTION 2 ▸ CORE CALCULATIONS
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ── Resolve profile (simple ints so they can feed ta.* lengths) ───────────────
+tf_sec = timeframe.in_seconds(timeframe.period)
+prof   = profile == "Auto" ? (tf_sec <= 60 ? "1m" : tf_sec <= 180 ? "3m" : "5m") : profile
+
+ema_fast_len = prof == "1m" ? 8  : prof == "3m" ? 9  : prof == "5m" ? 9  : ema_fast_in
+ema_mid_len  = prof == "1m" ? 21 : prof == "3m" ? 21 : prof == "5m" ? 21 : ema_mid_in
+ema_slow_len = prof == "1m" ? 55 : prof == "3m" ? 55 : prof == "5m" ? 50 : ema_slow_in
+rsi_len      = prof == "1m" ? 7  : prof == "3m" ? 9  : prof == "5m" ? 10 : rsi_len_in
+macd_fast    = prof == "1m" ? 6  : prof == "3m" ? 8  : prof == "5m" ? 8  : macd_fast_in
+macd_slow    = prof == "1m" ? 13 : prof == "3m" ? 17 : prof == "5m" ? 21 : macd_slow_in
+macd_signal  = prof == "1m" ? 5  : prof == "3m" ? 6  : prof == "5m" ? 7  : macd_signal_in
+atr_len      = prof == "1m" ? 10 : prof == "3m" ? 12 : prof == "5m" ? 14 : atr_len_in
+stoch_rsi_len = prof == "1m" ? 8 : prof == "3m" ? 10 : prof == "5m" ? 12 : stoch_len_in
+cooldown     = prof == "1m" ? 3  : prof == "3m" ? 2  : prof == "5m" ? 2  : cooldown_bars
 
 // ── EMAs ──────────────────────────────────────────────────────────────────────
 ema_fast  = ta.ema(close, ema_fast_len)
@@ -88,37 +128,62 @@ stoch_d       = ta.sma(stoch_k, stoch_d_smooth)
 bull_trend = ema_fast > ema_mid and ema_mid > ema_slow
 bear_trend = ema_fast < ema_mid and ema_mid < ema_slow
 
-// ── Volume filter ─────────────────────────────────────────────────────────────
-vol_ma      = ta.sma(volume, vol_ma_len)
-vol_ok      = not use_vol_filter or volume > vol_ma
+// ── Volume / volatility ───────────────────────────────────────────────────────
+vol_ma    = ta.sma(volume, vol_ma_len)
+vol_ratio = vol_ma > 0 ? volume / vol_ma : 1.0   // 1.0 when volume data is missing
+vol_ok    = not use_vol_filter or volume > vol_ma
+atr_pct   = close > 0 ? atr / close * 100 : 0.0
+atr_ok    = atr_pct >= min_atr_pct
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 2b ▸ BUY % / SELL % CONFIDENCE
+// ─────────────────────────────────────────────────────────────────────────────
+// Each factor is scored from -1 (fully bearish) to +1 (fully bullish), then
+// weighted, and mapped to 0–100. Sell % = 100 - Buy %. Uses only current/past bars.
+f_clamp(x) => math.max(-1.0, math.min(1.0, x))
+
+// Trend: EMA stack, price vs slow EMA, fast-EMA slope
+trend_score = 0.4 * (ema_fast > ema_mid ? 1 : -1) + 0.3 * (close > ema_slow ? 1 : -1) + 0.3 * (ema_fast > nz(ema_fast[1], ema_fast) ? 1 : ema_fast < nz(ema_fast[1], ema_fast) ? -1 : 0)
+
+// Momentum: RSI distance from 50, MACD histogram vs ATR, Stoch RSI position
+mom_score = 0.4 * f_clamp((rsi - 50) / 20) + 0.4 * f_clamp(atr > 0 ? hist_line / (atr * 0.25) : 0.0) + 0.2 * f_clamp((nz(stoch_k, 50) - 50) / 40)
+
+// Volatility/volume flow: candle body in ATR units, boosted by relative volume
+body_score = f_clamp(atr > 0 ? (close - open) / atr * 1.5 : 0.0)
+flow_score = f_clamp(body_score * math.max(0.5, math.min(1.5, vol_ratio)))
+
+w_sum      = w_trend + w_mom + w_flow
+bull_score = w_sum > 0 ? (w_trend * trend_score + w_mom * mom_score + w_flow * flow_score) / w_sum : 0.0
+buy_pct    = math.round(50 + 50 * bull_score, 1)
+sell_pct   = math.round(100 - buy_pct, 1)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SECTION 3 ▸ SIGNAL LOGIC
 // ─────────────────────────────────────────────────────────────────────────────
+// Faster than a pure trend-follow: any ONE trigger (MACD cross, Stoch cross, or
+// price reclaiming the fast EMA) is enough, while trend alignment, RSI limits,
+// confidence, ATR, volume and cooldown filters keep noise down.
 
-// ── BUY conditions ────────────────────────────────────────────────────────────
-// 1. Price is above all EMAs (bullish structure)
-// 2. RSI above mid and not overbought
-// 3. MACD line crosses above signal (momentum)
-// 4. Stoch RSI K crosses above D from oversold zone
-buy_cond1 = close > ema_fast and close > ema_mid and close > ema_slow
-buy_cond2 = rsi > rsi_mid and rsi < rsi_ob
-buy_cond3 = ta.crossover(macd_line, signal_line)
-buy_cond4 = ta.crossover(stoch_k, stoch_d) and stoch_k < stoch_ob
+// ── BUY ───────────────────────────────────────────────────────────────────────
+buy_trend   = ema_fast > ema_mid and close > ema_mid
+buy_rsi     = rsi > 45 and rsi < rsi_ob
+buy_trigger = ta.crossover(macd_line, signal_line) or (ta.crossover(stoch_k, stoch_d) and stoch_k < stoch_ob) or ta.crossover(close, ema_fast)
 
-buy_signal = buy_cond1 and buy_cond2 and buy_cond3 and buy_cond4 and vol_ok
+// ── SELL ──────────────────────────────────────────────────────────────────────
+sell_trend   = ema_fast < ema_mid and close < ema_mid
+sell_rsi     = rsi < 55 and rsi > rsi_os
+sell_trigger = ta.crossunder(macd_line, signal_line) or (ta.crossunder(stoch_k, stoch_d) and stoch_k > stoch_os) or ta.crossunder(close, ema_fast)
 
-// ── SELL conditions ───────────────────────────────────────────────────────────
-// 1. Price is below all EMAs (bearish structure)
-// 2. RSI below mid and not oversold
-// 3. MACD line crosses below signal (momentum)
-// 4. Stoch RSI K crosses below D from overbought zone
-sell_cond1 = close < ema_fast and close < ema_mid and close < ema_slow
-sell_cond2 = rsi < rsi_mid and rsi > rsi_os
-sell_cond3 = ta.crossunder(macd_line, signal_line)
-sell_cond4 = ta.crossunder(stoch_k, stoch_d) and stoch_k > stoch_os
+// ── Cooldown + bar-close confirmation (no intrabar repaint) ───────────────────
+var int last_signal_bar = na
+cooldown_ok = na(last_signal_bar) or bar_index - last_signal_bar > cooldown
+common_ok   = barstate.isconfirmed and atr_ok and vol_ok and cooldown_ok
 
-sell_signal = sell_cond1 and sell_cond2 and sell_cond3 and sell_cond4 and vol_ok
+buy_signal  = common_ok and buy_trend  and buy_rsi  and buy_trigger  and buy_pct  >= min_conf
+sell_signal = common_ok and sell_trend and sell_rsi and sell_trigger and sell_pct >= min_conf
+
+if buy_signal or sell_signal
+    last_signal_bar := bar_index
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SECTION 4 ▸ WIN-RATE STATISTICS
@@ -184,6 +249,7 @@ sell_wr       = sell_total > 0 ? (sell_wins / sell_total) * 100 : 0.0
 // ─────────────────────────────────────────────────────────────────────────────
 // SECTION 5 ▸ PIVOT POINTS  (daily, classic formula)
 // ─────────────────────────────────────────────────────────────────────────────
+// [1] + lookahead_on = previous COMPLETED day only (non-repainting pattern)
 prev_high  = request.security(syminfo.tickerid, "D", high[1],  lookahead=barmerge.lookahead_on)
 prev_low   = request.security(syminfo.tickerid, "D", low[1],   lookahead=barmerge.lookahead_on)
 prev_close = request.security(syminfo.tickerid, "D", close[1], lookahead=barmerge.lookahead_on)
@@ -199,9 +265,9 @@ pp_s3  = prev_low  - 2 * (prev_high - pivot)
 // ─────────────────────────────────────────────────────────────────────────────
 // SECTION 6 ▸ PLOTS — EMAs
 // ─────────────────────────────────────────────────────────────────────────────
-plot(show_emas ? ema_fast : na,  "EMA 21",  color=color.new(color.yellow, 0), linewidth=1)
-plot(show_emas ? ema_mid  : na,  "EMA 50",  color=color.new(color.orange, 0), linewidth=2)
-plot(show_emas ? ema_slow : na,  "EMA 200", color=color.new(color.red,    0), linewidth=2)
+plot(show_emas ? ema_fast : na,  "EMA Fast",  color=color.new(color.yellow, 0), linewidth=1)
+plot(show_emas ? ema_mid  : na,  "EMA Mid",  color=color.new(color.orange, 0), linewidth=2)
+plot(show_emas ? ema_slow : na,  "EMA Slow", color=color.new(color.red,    0), linewidth=2)
 
 // ── EMA ribbon shading ────────────────────────────────────────────────────────
 p_fast = plot(show_emas ? ema_fast : na, display=display.none)
@@ -250,7 +316,7 @@ if show_sl_tp and sell_signal
 // ─────────────────────────────────────────────────────────────────────────────
 // SECTION 9 ▸ WIN-RATE TABLE
 // ─────────────────────────────────────────────────────────────────────────────
-var table wr_table = table.new(position.top_right, 2, 6,
+var table wr_table = table.new(position.top_right, 2, 8,
      bgcolor      = color.new(color.black,  30),
      border_width = 1,
      border_color = color.new(color.gray, 40))
@@ -268,6 +334,8 @@ if show_win_table and barstate.islast
     table.cell(wr_table, 0, 3, "Sell WR",     text_color=color.red,   text_size=size.small)
     table.cell(wr_table, 0, 4, "Total Sigs",  text_color=color.white, text_size=size.small)
     table.cell(wr_table, 0, 5, "Trend",       text_color=color.white, text_size=size.small)
+    table.cell(wr_table, 0, 6, "Buy %",       text_color=color.lime,  text_size=size.small)
+    table.cell(wr_table, 0, 7, "Sell %",      text_color=color.red,   text_size=size.small)
 
     // Values column
     wr_color = overall_wr >= 60 ? color.lime : overall_wr >= 45 ? color.yellow : color.red
@@ -286,6 +354,16 @@ if show_win_table and barstate.islast
     trend_txt   = bull_trend ? "BULLISH ▲" : bear_trend ? "BEARISH ▼" : "RANGING ◆"
     trend_color = bull_trend ? color.lime   : bear_trend ? color.red   : color.gray
     table.cell(wr_table, 1, 5, trend_txt, text_color=trend_color, text_size=size.small)
+
+    // Live confidence (current bar)
+    buy_pct_color  = buy_pct  >= 60 ? color.lime : buy_pct  >= 45 ? color.yellow : color.gray
+    sell_pct_color = sell_pct >= 60 ? color.red  : sell_pct >= 45 ? color.yellow : color.gray
+    table.cell(wr_table, 1, 6, str.tostring(buy_pct,  "#.#") + "%", text_color=buy_pct_color,  text_size=size.small)
+    table.cell(wr_table, 1, 7, str.tostring(sell_pct, "#.#") + "%", text_color=sell_pct_color, text_size=size.small)
+
+// Buy % / Sell % history (Data Window + Status Line, hidden on the chart pane)
+plot(buy_pct,  "Buy %",  color=color.lime, display=display.data_window + display.status_line)
+plot(sell_pct, "Sell %", color=color.red,  display=display.data_window + display.status_line)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SECTION 10 ▸ ALERTS
